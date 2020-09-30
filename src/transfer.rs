@@ -9,6 +9,7 @@ use std::pin::Pin;
 use libc::{c_void};
 use futures::channel::oneshot::{Sender, Receiver, channel};
 use std::slice;
+use byte_slice_cast::AsSliceOf;
 
 #[derive(Debug, Clone, Copy)]
 pub struct IsoPacketDescriptor {
@@ -42,7 +43,7 @@ impl TransferContext {
 pub struct TransferResult {
     pub status: i32,
     pub actual_length: i32,
-    pub data: Vec<u8>,
+    pub data: Vec<i16>,
     pub pkt_descs: Vec<IsoPacketDescriptor>,
 }
 
@@ -104,7 +105,7 @@ impl Future for Submission {
 pub struct Transfer<T: UsbContext> {
     context: T,
     native_transfer: *mut libusb_transfer,
-    buffer: Vec<u8>,
+    pub buffer: Vec<i16>,
 }
 
 impl<T: UsbContext> Transfer<T> {
@@ -116,7 +117,7 @@ impl<T: UsbContext> Transfer<T> {
             if native_transfer == null_mut() {
                 return Err(anyhow!("libusb_alloc_transfer failed!"));
             }
-            let mut buffer = vec![0u8; sz];
+            let mut buffer = vec![0i16; sz / 2];
             (*native_transfer).endpoint = ep;
             (*native_transfer).transfer_type = LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
             (*native_transfer).timeout = 0;
@@ -152,7 +153,7 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
     let mut data = Vec::new();
     unsafe {
         // TODO: avoid copy
-        data.extend_from_slice(slice::from_raw_parts_mut(xfer.buffer, xfer.length as usize));
+        data.extend_from_slice(slice::from_raw_parts_mut(xfer.buffer, xfer.length as usize).as_slice_of::<i16>().unwrap());
     }
     let num_pkts = xfer.num_iso_packets as usize;
     let pkt_descs: Vec<IsoPacketDescriptor> = unsafe {

@@ -58,15 +58,31 @@ async fn msg_loop() -> Result<(), Error> {
     let pkt_cnt = 6;
     let pkt_sz = 128;
     info!("Creating transfers...");
-    let transfers: Vec<_> = (0..2).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap()).collect();
+    let mut transfers: Vec<_> = (0..3).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap()).collect();
     info!("Submitting transfers...");
     let mut submissions: Vec<Submission> = transfers.iter().map(|xfer| xfer.submit().unwrap()).collect();
     info!("Polling transfers...");
 
+    let volume = 0.8f32;
+    let tone_hz = 440f32;
+    let samp_per_sec = 32000f32;
+    let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
+    let mut samp_idx = 0;
     loop {
         let (res, idx, mut sub2) = futures::future::select_all(submissions.into_iter()).await;
         info!("Result={:?}", res);
-        sub2.push(transfers[idx].submit()?);
+        let mut xfer = &mut transfers[idx];
+
+        for buff_idx in 0..xfer.buffer.len() {
+            let abs_samp = (samp_idx + buff_idx) as f32;
+            let phase = (abs_samp * ang_per_samp).sin();
+            let volume = phase * volume;
+            let scaled = volume * std::i16::MAX as f32;
+            xfer.buffer[buff_idx] = scaled as i16;
+        }
+        samp_idx += xfer.buffer.len();
+
+        sub2.push(xfer.submit()?);
         submissions = sub2;
     }
 
