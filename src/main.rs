@@ -50,13 +50,8 @@ async fn msg_loop() -> Result<(), Error> {
     if handle.kernel_driver_active(iface)? {
         handle.detach_kernel_driver(iface)?;
     }
-    if handle.kernel_driver_active(1)? {
-        handle.detach_kernel_driver(1)?;
-    }
     handle.claim_interface(iface)?;
-    handle.claim_interface(1)?;
     handle.set_alternate_setting(iface, 1)?;
-    handle.set_alternate_setting(1, 1)?;
 
     let ctx = GlobalContext::default();;
     let ep = 1;
