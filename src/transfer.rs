@@ -70,23 +70,28 @@ impl Future for Submission {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.result_tail.is_some() {
+            info!("Submitting transfer...");
             let ctx = Box::new(TransferContext::new(self.result_tail.take().unwrap(), cx.waker().clone()));
             let res = unsafe {
                 (*self.native_transfer).user_data = Box::into_raw(ctx) as *mut c_void;
                 libusb_submit_transfer(self.native_transfer)
             };
             if res == 0 {
+                info!("Submitted transfer!");
                 Poll::Pending
             } else {
+                error!("Submission failed!");
                 Poll::Ready(Err(anyhow!("libusb_submit_transfer error: {}", res)))
             }
         } else {
             let res = self.result_head.try_recv();
             if res.is_err() {
+                error!("Error getting transfer result: {:?}", &res);
                 Poll::Ready(Err(Error::from(res.err().unwrap())))
             } else {
                 let res = res.unwrap();
                 if res.is_some() {
+                    info!("Got transfer result!");
                     Poll::Ready(Ok(res.unwrap()))
                 } else {
                     Poll::Pending
@@ -143,6 +148,7 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
     let xfer = unsafe { &*xfer };
+    info!("Transfer completed with status: {}", xfer.status);
     let mut data = Vec::new();
     unsafe {
         // TODO: avoid copy
