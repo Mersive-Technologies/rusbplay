@@ -7,7 +7,7 @@ extern crate anyhow;
 
 use anyhow::Error;
 use rusb::{DeviceList, GlobalContext, DeviceHandle, UsbContext};
-use crate::transfer::Transfer;
+use crate::transfer::{Transfer, Submission};
 use futures::executor;
 use futures::future::SelectAll;
 
@@ -44,10 +44,15 @@ async fn msg_loop() -> Result<(), Error> {
     let ep = 1;
     let pkt_cnt = 6;
     let pkt_sz = 128;
-    let transfers = (0..1).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap());
-    let submissions: Vec<_> = transfers.map(|xfer| xfer.submit().unwrap()).collect();
+    let transfers: Vec<_> = (0..1).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap()).collect();
+    let mut submissions: Vec<Submission> = transfers.iter().map(|xfer| xfer.submit().unwrap()).collect();
 
-    let f3: SelectAll<_> = futures::future::select_all(submissions.into_iter());
+    loop {
+        let (res, idx, mut sub2) = futures::future::select_all(submissions.into_iter()).await;
+        info!("Result={:?}", res);
+        sub2.push(transfers[idx].submit()?);
+        submissions = sub2;
+    }
 
     Ok(())
 }

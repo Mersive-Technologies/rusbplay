@@ -38,6 +38,7 @@ impl TransferContext {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TransferResult {
     pub status: i32,
     pub actual_length: i32,
