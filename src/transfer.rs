@@ -43,8 +43,6 @@ impl TransferContext {
 pub struct TransferResult {
     pub status: i32,
     pub actual_length: i32,
-    pub data: Vec<i16>,
-    pub pkt_descs: Vec<IsoPacketDescriptor>,
 }
 
 pub struct Submission {
@@ -71,14 +69,14 @@ impl Future for Submission {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.result_tail.is_some() {
-            info!("Submitting transfer...");
+            trace!("Submitting transfer...");
             let ctx = Box::new(TransferContext::new(self.result_tail.take().unwrap(), cx.waker().clone()));
             let res = unsafe {
                 (*self.native_transfer).user_data = Box::into_raw(ctx) as *mut c_void;
                 libusb_submit_transfer(self.native_transfer)
             };
             if res == 0 {
-                info!("Submitted transfer!");
+                trace!("Submitted transfer!");
                 Poll::Pending
             } else {
                 error!("Submission failed!");
@@ -92,7 +90,7 @@ impl Future for Submission {
             } else {
                 let res = res.unwrap();
                 if res.is_some() {
-                    info!("Got transfer result!");
+                    trace!("Got transfer result!");
                     Poll::Ready(Ok(res.unwrap()))
                 } else {
                     Poll::Pending
@@ -149,23 +147,10 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
     let xfer = unsafe { &*xfer };
-    info!("Transfer completed with status: {}", xfer.status);
-    let mut data = Vec::new();
-    unsafe {
-        // TODO: avoid copy
-        data.extend_from_slice(slice::from_raw_parts_mut(xfer.buffer, xfer.length as usize).as_slice_of::<i16>().unwrap());
-    }
-    let num_pkts = xfer.num_iso_packets as usize;
-    let pkt_descs: Vec<IsoPacketDescriptor> = unsafe {
-        let src_descs = slice::from_raw_parts(&xfer.iso_packet_desc as *const libusb_iso_packet_descriptor, num_pkts);
-        src_descs.iter().map(|src| IsoPacketDescriptor::from_libusb(&src)).collect() 
-    };
-
+    trace!("Transfer completed with status: {}", xfer.status);
     let result = TransferResult {
         status: xfer.status,
         actual_length: xfer.actual_length,
-        data,
-        pkt_descs,
     };
     ctx.result_tail.send(result);
     ctx.waker.wake();

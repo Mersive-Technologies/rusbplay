@@ -70,7 +70,15 @@ async fn msg_loop() -> Result<(), Error> {
     let mut samp_idx = 0;
     loop {
         let (res, idx, mut sub2) = futures::future::select_all(submissions.into_iter()).await;
-        info!("Result={:?}", res);
+        trace!("Result={:?}", res);
+        if res.is_err() {
+            error!("Error transferring: {:?}", res);
+        } else {
+            let status = res.unwrap().status;
+            if status != 0 {
+                error!("Error transferring: {:?}", status);
+            }
+        }
         let mut xfer = &mut transfers[idx];
 
         for buff_idx in 0..xfer.buffer.len() {
