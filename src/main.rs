@@ -10,9 +10,22 @@ use rusb::{DeviceList, GlobalContext, DeviceHandle, UsbContext};
 use crate::transfer::{Transfer, Submission};
 use futures::executor;
 use futures::future::SelectAll;
+use std::thread;
+use std::time::Duration;
 
 fn main() {
     pretty_env_logger::init_timed();
+
+    let _ = thread::spawn(move || {
+        let timeout = Duration::from_millis(100);
+        loop {
+            let res = GlobalContext::default().handle_events(Some(timeout));
+            if res.is_err() {
+                error!("Error processing rusb events: {:?}", res.err());
+            }
+        }
+    });
+
     let res = run();
     if res.is_err() {
         error!("Error: {}", res.err().unwrap());
