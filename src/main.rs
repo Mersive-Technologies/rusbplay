@@ -45,39 +45,28 @@ async fn msg_loop() -> Result<(), Error> {
         desc.vendor_id() == 0x046d && desc.product_id() == 0x0867
     }).ok_or(anyhow!("Error finding item!"))?;
     info!("dev={:?}", dev);
-    // let mut handle = dev.open().unwrap();
-    // handle.reset().unwrap();
-    // drop(handle);
-    // thread::sleep(Duration::from_millis(400));
     let mut handle = dev.open().unwrap();
     handle.reset().unwrap();
-    // thread::sleep(Duration::from_millis(250));
-    let iface = 2;
-    // let _ = handle.read_string_descriptor_ascii(3).unwrap();
-    // let _ = handle.read_string_descriptor_ascii(2).unwrap();
-    // let config = handle.active_configuration().unwrap();
-    // if handle.kernel_driver_active(1).unwrap() { handle.detach_kernel_driver(1).unwrap(); }
-    // if handle.kernel_driver_active(2).unwrap() { handle.detach_kernel_driver(2).unwrap(); }
-    // thread::sleep(Duration::from_millis(320));
-    // info!("Prior config={} new config=1", config);
-    // for _ in 0..3 {
-        handle.unconfigure();
-        let res = handle.set_active_configuration(1);
-        info!("set config res={:?}", res);
-        // if res.is_ok() { break; }
-        // thread::sleep(Duration::from_millis(1000));
-    // }
+    handle.unconfigure();
+    let res = handle.set_active_configuration(1);
+    info!("set config res={:?}", res);
     if handle.kernel_driver_active(1).unwrap() { handle.detach_kernel_driver(1).unwrap(); }
     if handle.kernel_driver_active(2).unwrap() { handle.detach_kernel_driver(2).unwrap(); }
     handle.claim_interface(1).unwrap();
     handle.claim_interface(2).unwrap();
     handle.set_alternate_setting(1, 0).unwrap();
     handle.set_alternate_setting(2, 0).unwrap();
-    // thread::sleep(Duration::from_millis(30));
-    // handle.set_alternate_setting(1, 0).unwrap();
-    // handle.set_alternate_setting(2, 0).unwrap();
 
-    handle.write_control(0x21, 1, 0x0200, 0x0200, &[0x4cu8, 0xfau8], Duration::from_millis(0));
+    handle.write_control(0x21, 0x0a, 0x0000, 0x03, &[0u8; 0], Duration::from_millis(0)); // set idle
+
+    handle.write_control(0x21, 1, 0x0200, 0x0200, &[0x4cu8, 0xfau8], Duration::from_millis(0)); // set speaker volume
+    handle.write_control(0x21, 1, 0x0200, 0x0600, &[0x60u8, 0xe7u8], Duration::from_millis(0)); // set mic volume
+
+    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
 
     // thread::sleep(Duration::from_millis(1000));
     handle.set_alternate_setting(2, 1).unwrap();
