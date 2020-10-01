@@ -45,20 +45,50 @@ async fn msg_loop() -> Result<(), Error> {
         desc.vendor_id() == 0x046d && desc.product_id() == 0x0867
     }).ok_or(anyhow!("Error finding item!"))?;
     info!("dev={:?}", dev);
-    let mut handle = dev.open()?;
+    // let mut handle = dev.open().unwrap();
+    // handle.reset().unwrap();
+    // drop(handle);
+    // thread::sleep(Duration::from_millis(400));
+    let mut handle = dev.open().unwrap();
+    handle.reset().unwrap();
+    // thread::sleep(Duration::from_millis(250));
     let iface = 2;
-    if handle.kernel_driver_active(iface)? {
-        handle.detach_kernel_driver(iface)?;
-    }
-    handle.claim_interface(iface)?;
-    handle.set_alternate_setting(iface, 1)?;
+    // let _ = handle.read_string_descriptor_ascii(3).unwrap();
+    // let _ = handle.read_string_descriptor_ascii(2).unwrap();
+    // let config = handle.active_configuration().unwrap();
+    // if handle.kernel_driver_active(1).unwrap() { handle.detach_kernel_driver(1).unwrap(); }
+    // if handle.kernel_driver_active(2).unwrap() { handle.detach_kernel_driver(2).unwrap(); }
+    // thread::sleep(Duration::from_millis(320));
+    // info!("Prior config={} new config=1", config);
+    // for _ in 0..3 {
+        handle.unconfigure();
+        let res = handle.set_active_configuration(1);
+        info!("set config res={:?}", res);
+        // if res.is_ok() { break; }
+        // thread::sleep(Duration::from_millis(1000));
+    // }
+    if handle.kernel_driver_active(1).unwrap() { handle.detach_kernel_driver(1).unwrap(); }
+    if handle.kernel_driver_active(2).unwrap() { handle.detach_kernel_driver(2).unwrap(); }
+    handle.claim_interface(1).unwrap();
+    handle.claim_interface(2).unwrap();
+    handle.set_alternate_setting(1, 0).unwrap();
+    handle.set_alternate_setting(2, 0).unwrap();
+    // thread::sleep(Duration::from_millis(30));
+    // handle.set_alternate_setting(1, 0).unwrap();
+    // handle.set_alternate_setting(2, 0).unwrap();
+
+    handle.write_control(0x21, 1, 0x0200, 0x0200, &[0x4cu8, 0xfau8], Duration::from_millis(0));
+
+    // thread::sleep(Duration::from_millis(1000));
+    handle.set_alternate_setting(2, 1).unwrap();
+    thread::sleep(Duration::from_millis(250));
 
     let ctx = GlobalContext::default();;
     let ep = 1;
-    let pkt_cnt = 6;
+    let pkt_cnt = 10;
     let pkt_sz = 128;
     info!("Creating transfers...");
-    let mut transfers: Vec<_> = (0..3).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap()).collect();
+    let mut transfers: Vec<_> = (0..2).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap()).collect();
     info!("Submitting transfers...");
     let mut submissions: Vec<Submission> = transfers.iter().map(|xfer| xfer.submit().unwrap()).collect();
     info!("Polling transfers...");
@@ -73,10 +103,14 @@ async fn msg_loop() -> Result<(), Error> {
         trace!("Result={:?}", res);
         if res.is_err() {
             error!("Error transferring: {:?}", res);
+            handle.set_alternate_setting(2, 0).unwrap();
+            handle.set_alternate_setting(2, 1).unwrap();
         } else {
             let status = res.unwrap().status;
             if status != 0 {
                 error!("Error transferring: {:?}", status);
+                handle.set_alternate_setting(2, 0).unwrap();
+                handle.set_alternate_setting(2, 1).unwrap();
             }
         }
         let mut xfer = &mut transfers[idx];
