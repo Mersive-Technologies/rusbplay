@@ -57,18 +57,6 @@ async fn msg_loop() -> Result<(), Error> {
     handle.set_alternate_setting(1, 0).unwrap();
     handle.set_alternate_setting(2, 0).unwrap();
 
-    // handle.write_control(0x21, 0x0a, 0x0000, 0x03, &[0u8; 0], Duration::from_millis(0)); // set idle
-    //
-    // handle.write_control(0x21, 1, 0x0200, 0x0200, &[0x4cu8, 0xfau8], Duration::from_millis(0)); // set speaker volume
-    // handle.write_control(0x21, 1, 0x0200, 0x0600, &[0x60u8, 0xe7u8], Duration::from_millis(0)); // set mic volume
-    //
-    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-
-    // thread::sleep(Duration::from_millis(1000));
     handle.set_alternate_setting(2, 2).unwrap();
     thread::sleep(Duration::from_millis(250));
 
