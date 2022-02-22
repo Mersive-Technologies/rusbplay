@@ -91,12 +91,22 @@ unsafe fn run() -> Result<(), Error> {
 
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
     let mut done = Arc::new(AtomicBool::new(false));
-    // unsafe {
-    //     let res = libusb_submit_transfer(native_transfer);
-    //     println!("Transfer submitted {}", res);
-    // };
 
+    let volume = 0.05f32;
+    let tone_hz = 440f32;
+    let samp_per_sec = 48000f32;
+    let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
+    let mut samp_idx = 0;
     loop {
+        for buff_idx in 0..buffer.len() {
+            let abs_samp = (samp_idx + buff_idx) as f32;
+            let phase = (abs_samp * ang_per_samp).sin();
+            let volume = phase * volume;
+            let scaled = volume * std::i16::MAX as f32;
+            buffer[buff_idx] = scaled as i16;
+        }
+        samp_idx += buffer.len();
+
         done.store(false, Ordering::Relaxed);
         let ctx = Box::new(TransferContext { done: done.clone() });
         (*native_transfer).user_data = Box::into_raw(ctx) as *mut c_void;
