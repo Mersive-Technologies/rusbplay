@@ -82,7 +82,7 @@ async fn msg_loop() -> Result<(), Error> {
     let mut submissions: Vec<Submission> = transfers.iter().map(|xfer| xfer.submit().unwrap()).collect();
     info!("Polling transfers...");
 
-    let volume = 0.8f32;
+    let volume = 0.05f32;
     let tone_hz = 440f32;
     let samp_per_sec = 48000f32;
     let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
