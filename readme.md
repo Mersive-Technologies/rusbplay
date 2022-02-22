@@ -64,6 +64,7 @@ const LIBUSB_ENDPOINT_IN: u8 = 0x80; // if an endpoint is >= 128, it's input
 ```
 
 So we have two endpoints:
-1. a mic
-2. a speaker
+1 - a mic
+4 - speaker
 
+And the speaker is on interface #2
