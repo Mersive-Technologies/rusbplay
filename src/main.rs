@@ -48,10 +48,6 @@ unsafe fn run() -> Result<(), Error> {
     let pkt_sz = 192; // 48000hz * 16bits * 2chan = 192,000byte/sec / 192 = 1ms of audio
     let pkt_cnt = 10; // Each transfer contains 10ms of audio
     let sz = pkt_cnt * pkt_sz; // One transfer can have many packets
-    let volume = 0.05f32; // 5% to save my ears
-    let tone_hz = 440f32; // pitch standard "A" note
-    let samp_per_sec = 48000f32; // frequency of alt setting #2 (see descriptors in readme)
-    let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
 
     // Find and open device
     let list = DeviceList::new()?;
@@ -75,14 +71,7 @@ unsafe fn run() -> Result<(), Error> {
 
     let mut samp_idx = 0;
     loop {
-        for buff_idx in 0..buffer.len() {
-            let abs_samp = (samp_idx + buff_idx) as f32;
-            let phase = (abs_samp * ang_per_samp).sin();
-            let volume = phase * volume;
-            let scaled = volume * std::i16::MAX as f32;
-            buffer[buff_idx] = scaled as i16;
-        }
-        samp_idx += buffer.len();
+        fill_buff(&mut buffer, &mut samp_idx);
 
         done.store(false, Ordering::Relaxed);
         let ctx = Box::new(TransferContext { done: done.clone() });
@@ -110,6 +99,21 @@ unsafe fn run() -> Result<(), Error> {
         }
         println!("Handled events");
     }
+}
+
+unsafe fn fill_buff(buffer: &mut Vec<i16>, samp_idx: &mut usize) {
+    let volume = 0.05f32; // 5% to save my ears
+    let tone_hz = 440f32; // pitch standard "A" note
+    let samp_per_sec = 48000f32; // frequency of alt setting #2 (see descriptors in readme)
+    let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
+    for buff_idx in 0..buffer.len() {
+        let abs_samp = (*samp_idx + buff_idx) as f32;
+        let phase = (abs_samp * ang_per_samp).sin();
+        let volume = phase * volume;
+        let scaled = volume * std::i16::MAX as f32;
+        buffer[buff_idx] = scaled as i16;
+    }
+    (*samp_idx) += buffer.len();
 }
 
 unsafe fn alloc_xfer(ep: c_uchar, pkt_sz: usize, pkt_cnt: usize,
