@@ -10,19 +10,22 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use anyhow::{Context, Error};
-// use futures::channel::mpsc::{channel, Receiver, Sender};
+use futures::channel::mpsc::{channel, Receiver, Sender};
+use futures::SinkExt;
 use libusb1_sys::constants::LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
 use libusb1_sys::{libusb_alloc_transfer, libusb_submit_transfer, libusb_transfer};
 use rusb::{DeviceHandle, DeviceList, GlobalContext, UsbContext};
 
 #[derive(Debug, Clone)]
 pub struct TransferResult {
+    pub idx: usize,
     pub status: i32,
     pub actual_length: i32,
 }
 
 pub struct TransferContext {
-    done: Arc<AtomicBool>,
+    pub idx: usize,
+    result_tail: Sender<TransferResult>,
 }
 
 fn main() -> Result<(), Error> {
@@ -71,8 +74,12 @@ unsafe fn run() -> Result<(), Error> {
     }
     let xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
 
-    // let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
+    let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
     let done = Arc::new(AtomicBool::new(false));
+
+    for(let xfer in xfers) {
+
+    }
 
     let mut samp_idx = 0;
     loop {
@@ -80,7 +87,10 @@ unsafe fn run() -> Result<(), Error> {
 
         for _ in 0..2 {
             done.store(false, Ordering::Relaxed);
-            let ctx = Box::new(TransferContext { done: done.clone() });
+            let ctx = Box::new(TransferContext {
+                idx: buff_idx,
+                result_tail: result_tail.clone()
+            });
             (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
             let res = libusb_submit_transfer(xfer);
             if res == 0 {
@@ -153,9 +163,10 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
     };
     let xfer = unsafe { &*xfer };
     trace!("Transfer completed with status: {}", xfer.status);
-    // let result = TransferResult {
-    //     status: xfer.status,
-    //     actual_length: xfer.actual_length,
-    // };
-    ctx.done.store(true, Ordering::Relaxed);
+    let result = TransferResult {
+        idx: ctx.idx,
+        status: xfer.status,
+        actual_length: xfer.actual_length,
+    };
+    ctx.result_tail.send(result);
 }
