@@ -37,51 +37,61 @@ fn main() -> Result<(), Error> {
 }
 
 unsafe fn run() -> Result<(), Error> {
+    // do math
+    let vid = 0x0bda; // VendorID of USB digital-analog converter
+    let pid = 0x48a8; // ProductID of USB digital-analog converter
+    let iface = 2; // Speaker interface (as opposed to mic)
+    let ep = 4; // Endpoint 4 - speaker
+    let set_enabled = 2; // 48khz (see descriptors in readme)
+    let set_disable = 0; // Standard
+
+    let pkt_sz = 192; // 48000hz * 16bits * 2chan = 192,000byte/sec / 192 = 1ms of audio
+    let pkt_cnt = 10; // Each transfer contains 10ms of audio
+    let sz = pkt_cnt * pkt_sz; // One transfer can have many packets
+    let volume = 0.05f32; // 5% to save my ears
+    let tone_hz = 440f32; // pitch standard "A" note
+    let samp_per_sec = 48000f32; // frequency of alt setting #2 (see descriptors in readme)
+    let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
+
     let list = DeviceList::new()?;
     info!("Found {} devices", list.len());
     let dev = list.iter().find(|dev| {
         match dev.device_descriptor() {
-            Ok(desc) => {
-                desc.vendor_id() == 0x0bda && desc.product_id() == 0x48a8
-            },
+            Ok(desc) => desc.vendor_id() == vid && desc.product_id() == pid,
             _ => false
         }
     }).ok_or(anyhow!("Error finding item!"))?;
     println!("dev={:?}", dev);
 
     let mut handle = dev.open().context("Error opening device!")?;
-    handle.reset().unwrap();
-    handle.unconfigure();
-    let res = handle.set_active_configuration(1);
-    info!("set config res={:?}", res);
-    if handle.kernel_driver_active(2).unwrap() { handle.detach_kernel_driver(2).unwrap(); }
-    handle.claim_interface(2).unwrap();
-    handle.set_alternate_setting(2, 0).unwrap();
-    handle.set_alternate_setting(2, 2).unwrap();
+    // handle.reset().context("Error resetting device");
+    // handle.unconfigure().context("Error unconfiguring device")?;
+    // handle.set_active_configuration(1).context("Error setting config")?;
+    // if handle.kernel_driver_active(iface).unwrap() {
+    //     handle.detach_kernel_driver(iface).unwrap();
+    // }
+    handle.claim_interface(iface).unwrap();
+    // handle.set_alternate_setting(iface, set_disable).unwrap();
+    // handle.set_alternate_setting(iface, set_enabled).unwrap();
 
-    // do math
-    let ep = 4;
-    let pkt_cnt = 10;
-    let pkt_sz = 192;
-    let sz = pkt_cnt * pkt_sz; // One transfer can have many packets
     let mut buffer = vec![0i16; sz / 2];
 
     // allocate transfer
-    let mut native_transfer = *&libusb_alloc_transfer(pkt_cnt as i32);
-    if native_transfer == null_mut() {
+    let mut xfer = *&libusb_alloc_transfer(pkt_cnt as i32);
+    if xfer == null_mut() {
         return Err(anyhow!("libusb_alloc_transfer failed!"));
     }
-    (*native_transfer).dev_handle = handle.as_raw();
-    (*native_transfer).endpoint = ep;
-    (*native_transfer).transfer_type = LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
-    (*native_transfer).timeout = 0;
-    (*native_transfer).num_iso_packets = pkt_cnt as i32;
-    (*native_transfer).callback = *&iso_complete_handler;
-    (*native_transfer).length = sz as i32;
-    (*native_transfer).buffer = buffer.as_mut_ptr() as *mut u8;
+    (*xfer).dev_handle = handle.as_raw();
+    (*xfer).endpoint = ep;
+    (*xfer).transfer_type = LIBUSB_TRANSFER_TYPE_ISOCHRONOUS; // reserve seats on the bus
+    (*xfer).timeout = 0;
+    (*xfer).num_iso_packets = pkt_cnt as i32;
+    (*xfer).callback = *&iso_complete_handler;
+    (*xfer).length = sz as i32;
+    (*xfer).buffer = buffer.as_mut_ptr() as *mut u8;
 
     // Fill in packet descriptors
-    let pkt_descs = (*native_transfer).iso_packet_desc.as_mut_ptr();
+    let pkt_descs = (*xfer).iso_packet_desc.as_mut_ptr();
     for i in 0..pkt_cnt {
         let pkt_desc = pkt_descs.add(i as usize);
         (*pkt_desc).length = pkt_sz as u32;
@@ -92,10 +102,6 @@ unsafe fn run() -> Result<(), Error> {
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
     let mut done = Arc::new(AtomicBool::new(false));
 
-    let volume = 0.05f32;
-    let tone_hz = 440f32;
-    let samp_per_sec = 48000f32;
-    let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
     let mut samp_idx = 0;
     loop {
         for buff_idx in 0..buffer.len() {
@@ -109,15 +115,15 @@ unsafe fn run() -> Result<(), Error> {
 
         done.store(false, Ordering::Relaxed);
         let ctx = Box::new(TransferContext { done: done.clone() });
-        (*native_transfer).user_data = Box::into_raw(ctx) as *mut c_void;
-        let res = libusb_submit_transfer(native_transfer);
+        (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+        let res = libusb_submit_transfer(xfer);
         if res != 0 {
-            handle.set_alternate_setting(2, 0).unwrap();
-            handle.set_alternate_setting(2, 2).unwrap();
+            handle.set_alternate_setting(iface, set_disable).unwrap();
+            handle.set_alternate_setting(iface, set_enabled).unwrap();
 
             let ctx = Box::new(TransferContext { done: done.clone() });
-            (*native_transfer).user_data = Box::into_raw(ctx) as *mut c_void;
-            let res = libusb_submit_transfer(native_transfer);
+            (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+            let res = libusb_submit_transfer(xfer);
         }
         println!("Transfer submitted {}", res);
         let timeout = Duration::from_millis(100);
