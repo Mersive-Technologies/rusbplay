@@ -4,16 +4,16 @@ extern crate log;
 extern crate anyhow;
 
 use std::ffi::c_void;
+use std::os::raw::c_uchar;
 use std::ptr::null_mut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use anyhow::{Context, Error};
-use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::SinkExt;
+// use futures::channel::mpsc::{channel, Receiver, Sender};
 use libusb1_sys::constants::LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
 use libusb1_sys::{libusb_alloc_transfer, libusb_submit_transfer, libusb_transfer};
-use rusb::{DeviceList, GlobalContext, UsbContext};
+use rusb::{DeviceHandle, DeviceList, GlobalContext, UsbContext};
 
 #[derive(Debug, Clone)]
 pub struct TransferResult {
@@ -29,7 +29,7 @@ fn main() -> Result<(), Error> {
     println!("Hello, world!");
 
     unsafe {
-        run();
+        run()?;
     }
 
     println!("Done!");
@@ -53,6 +53,7 @@ unsafe fn run() -> Result<(), Error> {
     let samp_per_sec = 48000f32; // frequency of alt setting #2 (see descriptors in readme)
     let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
 
+    // Find and open device
     let list = DeviceList::new()?;
     info!("Found {} devices", list.len());
     let dev = list.iter().find(|dev| {
@@ -62,37 +63,15 @@ unsafe fn run() -> Result<(), Error> {
         }
     }).ok_or(anyhow!("Error finding item!"))?;
     println!("dev={:?}", dev);
-
     let mut handle = dev.open().context("Error opening device!")?;
     handle.claim_interface(iface).unwrap();
-
-    let mut buffer = vec![0i16; sz / 2];
-
+    
     // allocate transfer
-    let mut xfer = *&libusb_alloc_transfer(pkt_cnt as i32);
-    if xfer == null_mut() {
-        return Err(anyhow!("libusb_alloc_transfer failed!"));
-    }
-    (*xfer).dev_handle = handle.as_raw();
-    (*xfer).endpoint = ep;
-    (*xfer).transfer_type = LIBUSB_TRANSFER_TYPE_ISOCHRONOUS; // reserve seats on the bus
-    (*xfer).timeout = 0;
-    (*xfer).num_iso_packets = pkt_cnt as i32;
-    (*xfer).callback = *&iso_complete_handler;
-    (*xfer).length = sz as i32;
-    (*xfer).buffer = buffer.as_mut_ptr() as *mut u8;
+    let mut buffer = vec![0i16; sz / 2];
+    let xfer = alloc_xfer(ep, pkt_sz, pkt_cnt, &mut handle, &mut buffer)?;
 
-    // Fill in packet descriptors
-    let pkt_descs = (*xfer).iso_packet_desc.as_mut_ptr();
-    for i in 0..pkt_cnt {
-        let pkt_desc = pkt_descs.add(i as usize);
-        (*pkt_desc).length = pkt_sz as u32;
-        (*pkt_desc).actual_length = 0;
-        (*pkt_desc).status = 0;
-    }
-
-    let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
-    let mut done = Arc::new(AtomicBool::new(false));
+    // let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
+    let done = Arc::new(AtomicBool::new(false));
 
     let mut samp_idx = 0;
     loop {
@@ -116,6 +95,9 @@ unsafe fn run() -> Result<(), Error> {
             let ctx = Box::new(TransferContext { done: done.clone() });
             (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
             let res = libusb_submit_transfer(xfer);
+            if res != 0 {
+                Err(anyhow!("Unable to submit transfer!"))?;
+            }
         }
         println!("Transfer submitted {}", res);
         let timeout = Duration::from_millis(100);
@@ -128,20 +110,47 @@ unsafe fn run() -> Result<(), Error> {
         }
         println!("Handled events");
     }
+}
 
-    Ok(())
+unsafe fn alloc_xfer(ep: c_uchar, pkt_sz: usize, pkt_cnt: usize,
+                     handle: &mut DeviceHandle<GlobalContext>,
+                     buffer: &mut Vec<i16>
+) -> Result<*mut libusb_transfer, Error> {
+    let sz = pkt_cnt * pkt_sz;
+    let mut xfer = *&libusb_alloc_transfer(pkt_cnt as i32);
+    if xfer == null_mut() {
+        Err(anyhow!("libusb_alloc_transfer failed!"))?;
+    }
+    (*xfer).dev_handle = handle.as_raw();
+    (*xfer).endpoint = ep;
+    (*xfer).transfer_type = LIBUSB_TRANSFER_TYPE_ISOCHRONOUS; // reserve seats on the bus
+    (*xfer).timeout = 0;
+    (*xfer).num_iso_packets = pkt_cnt as i32;
+    (*xfer).callback = *&iso_complete_handler;
+    (*xfer).length = sz as i32;
+    (*xfer).buffer = buffer.as_mut_ptr() as *mut u8;
+
+    // Fill in packet descriptors
+    let pkt_descs = (*xfer).iso_packet_desc.as_mut_ptr();
+    for i in 0usize..pkt_cnt {
+        let pkt_desc = pkt_descs.add(i);
+        (*pkt_desc).length = pkt_sz as u32;
+        (*pkt_desc).actual_length = 0;
+        (*pkt_desc).status = 0;
+    }
+    Ok(xfer)
 }
 
 extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
     println!("Transfer complete!");
-    let mut ctx = unsafe {
+    let ctx = unsafe {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
     let xfer = unsafe { &*xfer };
     trace!("Transfer completed with status: {}", xfer.status);
-    let result = TransferResult {
-        status: xfer.status,
-        actual_length: xfer.actual_length,
-    };
+    // let result = TransferResult {
+    //     status: xfer.status,
+    //     actual_length: xfer.actual_length,
+    // };
     ctx.done.store(true, Ordering::Relaxed);
 }
