@@ -44,10 +44,9 @@ unsafe fn run() -> Result<(), Error> {
     let ep = 4; // Endpoint 4 - speaker
     let set_enabled = 2; // 48khz (see descriptors in readme)
     let set_disable = 0; // Standard
-
     let pkt_sz = 192; // 48000hz * 16bits * 2chan = 192,000byte/sec / 192 = 1ms of audio
     let pkt_cnt = 10; // Each transfer contains 10ms of audio
-    let sz = pkt_cnt * pkt_sz; // One transfer can have many packets
+    let buff_cnt = 2; // Number of buffers in ring
 
     // Find and open device
     let list = DeviceList::new()?;
@@ -63,8 +62,14 @@ unsafe fn run() -> Result<(), Error> {
     handle.claim_interface(iface).unwrap();
     
     // allocate transfer
-    let mut buffer = vec![0i16; sz / 2];
-    let xfer = alloc_xfer(ep, pkt_sz, pkt_cnt, &mut handle, &mut buffer)?;
+    let mut buffers: Vec<Vec<i16>> = (0..buff_cnt).map(|_| vec![0i16; pkt_cnt * pkt_sz / 2]).collect();
+    let (xfers, errors): (Vec<_>, Vec<_>) = buffers.iter().map(|mut b|
+        alloc_xfer(ep, pkt_sz, pkt_cnt, &mut handle, &mut b)
+    ).partition(Result::is_ok);
+    if let Some(e) = errors.first() {
+        e.context("Error allocating transfer")?;
+    }
+    let xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
 
     // let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
     let done = Arc::new(AtomicBool::new(false));
@@ -73,22 +78,18 @@ unsafe fn run() -> Result<(), Error> {
     loop {
         fill_buff(&mut buffer, &mut samp_idx);
 
-        done.store(false, Ordering::Relaxed);
-        let ctx = Box::new(TransferContext { done: done.clone() });
-        (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-        let res = libusb_submit_transfer(xfer);
-        if res != 0 {
-            handle.set_alternate_setting(iface, set_disable).unwrap();
-            handle.set_alternate_setting(iface, set_enabled).unwrap();
-
+        for _ in 0..2 {
+            done.store(false, Ordering::Relaxed);
             let ctx = Box::new(TransferContext { done: done.clone() });
             (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
             let res = libusb_submit_transfer(xfer);
-            if res != 0 {
-                Err(anyhow!("Unable to submit transfer!"))?;
+            if res == 0 {
+                println!("Transfer submitted {}", res);
+                break;
             }
+            handle.set_alternate_setting(iface, set_disable).unwrap();
+            handle.set_alternate_setting(iface, set_enabled).unwrap();
         }
-        println!("Transfer submitted {}", res);
         let timeout = Duration::from_millis(100);
         loop {
             println!("Handling events");
