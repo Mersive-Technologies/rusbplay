@@ -64,15 +64,7 @@ unsafe fn run() -> Result<(), Error> {
     println!("dev={:?}", dev);
 
     let mut handle = dev.open().context("Error opening device!")?;
-    // handle.reset().context("Error resetting device");
-    // handle.unconfigure().context("Error unconfiguring device")?;
-    // handle.set_active_configuration(1).context("Error setting config")?;
-    // if handle.kernel_driver_active(iface).unwrap() {
-    //     handle.detach_kernel_driver(iface).unwrap();
-    // }
     handle.claim_interface(iface).unwrap();
-    // handle.set_alternate_setting(iface, set_disable).unwrap();
-    // handle.set_alternate_setting(iface, set_enabled).unwrap();
 
     let mut buffer = vec![0i16; sz / 2];
 
