@@ -94,20 +94,20 @@ unsafe fn run() -> Result<(), Error> {
     let mut samp_idx = 0;
     for (idx, mut xfer) in xfers.iter_mut().enumerate() {
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(&cfg, idx, &mut xfer, &mut handle, &result_tail)?;
+        submit(idx, &mut xfer, &result_tail)?;
     }
 
     while let Ok(res) = result_head.recv() {
         let xfer = &mut xfers[res.idx];
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(&cfg, res.idx, xfer, &mut handle, &result_tail)?;
+        submit(res.idx, xfer, &result_tail)?;
     }
 
     Ok(())
 }
 
-unsafe fn submit(cfg: &Config, idx: usize, xfer: &mut Transfer,
-                 handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
+unsafe fn submit(
+    idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>
 ) -> Result<(), Error> {
     for _ in 0..2 {
         let ctx = Box::new(TransferContext {
@@ -120,8 +120,6 @@ unsafe fn submit(cfg: &Config, idx: usize, xfer: &mut Transfer,
             println!("Transfer submitted idx={} result={}", idx, res);
             return Ok(());
         }
-        handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
-        handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
     }
     Err(anyhow!("Failed to submit!"))
 }
@@ -153,6 +151,8 @@ unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
         handle.detach_kernel_driver(cfg.iface).context("Error detatching kernel")?;
     }
     handle.claim_interface(cfg.iface).context(anyhow!("Error claiming interface"))?;
+    handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
+    handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
     Ok(handle)
 }
 
