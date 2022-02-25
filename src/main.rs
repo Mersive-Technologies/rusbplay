@@ -142,7 +142,7 @@ async unsafe fn run() -> Result<(), Error> {
         set_disable: 0,
         pkt_sz: 192,
         pkt_cnt: 10,
-        buff_cnt: 2,
+        buff_cnt: 3,
     };
 
     rusb_event_loop();
@@ -164,6 +164,7 @@ async unsafe fn run() -> Result<(), Error> {
     loop {
         let (res, idx, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
         if res.is_err() {
+            println!("Resetting");
             handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
             handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
         }
