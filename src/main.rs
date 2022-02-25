@@ -10,7 +10,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 use anyhow::{Context, Error};
-use futures::{SinkExt, StreamExt};
 use libusb1_sys::constants::LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
 use libusb1_sys::{libusb_alloc_transfer, libusb_submit_transfer, libusb_transfer};
 use rusb::{DeviceHandle, DeviceList, GlobalContext, UsbContext};
@@ -33,7 +32,7 @@ pub struct Config {
     pub iface: u8, // Speaker interface (as opposed to mic)
     pub ep: c_uchar, // Endpoint 4 - speaker
     pub set_enabled: u8, // 48khz (see descriptors in readme)
-    pub set_disable: u8, // Standard
+    pub set_disable: u8, // Standard is 0=disabled
     pub pkt_sz: usize, // 48000hz * 16bits * 2chan = 192,000byte/sec / 192 = 1ms of audio
     pub pkt_cnt: usize, // Each transfer contains 10ms of audio
     pub buff_cnt: i32, // Number of buffers in ring
@@ -77,25 +76,42 @@ unsafe fn run() -> Result<(), Error> {
         xfers.push(xfer);
     }
 
-    let (result_tail, mut result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
+    let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
 
     let mut samp_idx = 0;
     for idx in 0..xfers.len() {
-        let xfer = &mut xfers[idx];
-        let buffer = &mut buffers[idx];
-        fill_buff(buffer, &mut samp_idx);
-        submit(&cfg, idx, *xfer, &mut handle, &result_tail)?;
+        submit(&cfg, idx, &mut xfers, &mut buffers, &mut samp_idx, &mut handle, &result_tail)?;
     }
 
-    loop {
-        while let Ok(res) = result_head.recv() {
-            println!("Has next");
-            let xfer = &mut xfers[res.idx];
-            let buffer = &mut buffers[res.idx];
-            fill_buff(buffer, &mut samp_idx);
-            submit(&cfg, res.idx, *xfer, &mut handle, &result_tail)?;
-        }
+    while let Ok(res) = result_head.recv() {
+        submit(&cfg, res.idx, &mut xfers, &mut buffers, &mut samp_idx, &mut handle, &result_tail)?;
     }
+
+    Ok(())
+}
+
+unsafe fn submit(cfg: &Config, idx: usize, xfers: &mut Vec<*mut libusb_transfer>,
+                 buffers: &mut Vec<Vec<i16>>, samp_idx: &mut usize,
+                 handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
+) -> Result<(), Error> {
+    let xfer = xfers[idx];
+    let buffer = &mut buffers[idx];
+    fill_buff(buffer, samp_idx);
+    for _ in 0..2 {
+        let ctx = Box::new(TransferContext {
+            idx,
+            result_tail: result_tail.clone()
+        });
+        (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+        let res = libusb_submit_transfer(xfer);
+        if res == 0 {
+            println!("Transfer submitted idx={} result={}", idx, res);
+            return Ok(());
+        }
+        handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
+        handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
+    }
+    Err(anyhow!("Failed to submit!"))
 }
 
 unsafe fn rusb_event_loop() {
@@ -126,26 +142,6 @@ unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
     }
     handle.claim_interface(cfg.iface).context(anyhow!("Error claiming interface"))?;
     Ok(handle)
-}
-
-unsafe fn submit(cfg: &Config, idx: usize, xfer: *mut libusb_transfer,
-                 handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
-) -> Result<(), Error> {
-    for _ in 0..2 {
-        let ctx = Box::new(TransferContext {
-            idx,
-            result_tail: result_tail.clone()
-        });
-        (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-        let res = libusb_submit_transfer(xfer);
-        if res == 0 {
-            println!("Transfer submitted idx={} result={}", idx, res);
-            return Ok(());
-        }
-        handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
-        handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
-    }
-    Err(anyhow!("Failed to submit!"))
 }
 
 unsafe fn fill_buff(buffer: &mut Vec<i16>, samp_idx: &mut usize) {
@@ -194,7 +190,7 @@ unsafe fn alloc_xfer(cfg: &Config,
 
 extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
     println!("Transfer complete!");
-    let mut ctx = unsafe {
+    let ctx = unsafe {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
     let xfer = unsafe { &*xfer };
