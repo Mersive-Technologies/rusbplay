@@ -64,24 +64,10 @@ unsafe fn run() -> Result<(), Error> {
     };
 
     // Find and open device
-    let list = DeviceList::new()?;
-    info!("Found {} devices", list.len());
-    let dev = list.iter().find(|dev| {
-        match dev.device_descriptor() {
-            Ok(desc) => desc.vendor_id() == cfg.vid && desc.product_id() == cfg.pid,
-            _ => false
-        }
-    }).ok_or(anyhow!("Error finding item!"))?;
-    println!("dev={:?}", dev);
-    let mut handle = dev.open().context("Error opening device!")?;
-    if handle.kernel_driver_active(cfg.iface).context(anyhow!("Error checking kernel"))? {
-        handle.detach_kernel_driver(cfg.iface).context("Error detatching kernel")?;
-    }
-    handle.claim_interface(cfg.iface).context(anyhow!("Error claiming interface"))?;
-    
+    let mut handle = open_dev(&cfg).context(anyhow!("Error opening device"))?;
+
     // allocate transfer
     let mut buffers: Vec<Vec<i16>> = (0..cfg.buff_cnt).map(|_| vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2]).collect();
-
     let mut xfers = vec![];
     for mut buffer in buffers.iter_mut() {
         let xfer = alloc_xfer(&cfg, &mut handle, &mut buffer).context(anyhow!("Error allocating transfer"))?;
@@ -113,6 +99,24 @@ unsafe fn run() -> Result<(), Error> {
             }
         }
     }
+}
+
+unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
+    let list = DeviceList::new()?;
+    info!("Found {} devices", list.len());
+    let dev = list.iter().find(|dev| {
+        match dev.device_descriptor() {
+            Ok(desc) => desc.vendor_id() == cfg.vid && desc.product_id() == cfg.pid,
+            _ => false
+        }
+    }).ok_or(anyhow!("Error finding item!"))?;
+    println!("dev={:?}", dev);
+    let mut handle = dev.open().context("Error opening device!")?;
+    if handle.kernel_driver_active(cfg.iface).context(anyhow!("Error checking kernel"))? {
+        handle.detach_kernel_driver(cfg.iface).context("Error detatching kernel")?;
+    }
+    handle.claim_interface(cfg.iface).context(anyhow!("Error claiming interface"))?;
+    Ok(handle)
 }
 
 unsafe fn submit(cfg: &Config, idx: usize, xfer: *mut libusb_transfer,
