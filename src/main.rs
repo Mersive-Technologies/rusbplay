@@ -3,8 +3,12 @@ extern crate log;
 #[macro_use]
 extern crate anyhow;
 
+use futures::executor;
 use std::ffi::c_void;
+use futures::Future;
+use futures::task::{Poll, Waker};
 use std::os::raw::c_uchar;
+use std::pin::Pin;
 use std::ptr::null_mut;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -41,6 +45,53 @@ impl Transfer {
     }
 }
 
+pub struct Submission {
+    xfer: *mut libusb_transfer,
+    result: Option<Result<TransferResult, Error>>,
+    result_tail: Sender<TransferResult>,
+    idx: usize,
+    submitted: bool,
+}
+
+impl Submission {
+    pub fn new(xfer: *mut libusb_transfer, idx: usize, result_tail: Sender<TransferResult>
+) -> Submission {
+        Submission {
+            xfer,
+            result: None,
+            result_tail,
+            idx,
+            submitted: false,
+        }
+    }
+}
+
+impl Future for Submission {
+    type Output = Result<TransferResult, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut futures::task::Context<'_>) -> Poll<Self::Output> {
+        if self.submitted == false {
+            let ctx = Box::new(TransferContext {
+                idx: self.idx,
+                result_tail: self.result_tail.clone()
+            });
+            unsafe {
+                (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+                let res = libusb_submit_transfer(self.xfer);
+                return if res == 0 {
+                    println!("Transfer submitted idx={} result={}", self.idx, res);
+                    Poll::Pending
+                } else {
+                    error!("Submission failed!");
+                    Poll::Ready(Err(anyhow!("libusb_submit_transfer error: {}", res)))
+                }
+            }
+        }
+        println!("Polled");
+        Poll::Pending
+    }
+}
+
 pub struct Config {
     pub vid: u16, // VendorID of USB digital-analog converter
     pub pid: u16, // ProductID of USB digital-analog converter
@@ -57,14 +108,14 @@ fn main() -> Result<(), Error> {
     println!("Hello, world!");
 
     unsafe {
-        run()?;
+        executor::block_on(run())?;
     }
 
     println!("Done!");
     Ok(())
 }
 
-unsafe fn run() -> Result<(), Error> {
+async unsafe fn run() -> Result<(), Error> {
     // do math
     let cfg = Config {
         vid: 0x0bda,
@@ -94,13 +145,13 @@ unsafe fn run() -> Result<(), Error> {
     let mut samp_idx = 0;
     for (idx, mut xfer) in xfers.iter_mut().enumerate() {
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(idx, &mut xfer, &result_tail)?;
+        submit(idx, &mut xfer, &result_tail)?.await;
     }
 
     while let Ok(res) = result_head.recv() {
         let xfer = &mut xfers[res.idx];
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(res.idx, xfer, &result_tail)?;
+        submit(res.idx, xfer, &result_tail)?.await;
     }
 
     Ok(())
@@ -108,20 +159,8 @@ unsafe fn run() -> Result<(), Error> {
 
 unsafe fn submit(
     idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>
-) -> Result<(), Error> {
-    for _ in 0..2 {
-        let ctx = Box::new(TransferContext {
-            idx,
-            result_tail: result_tail.clone()
-        });
-        (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-        let res = libusb_submit_transfer(xfer.xfer);
-        if res == 0 {
-            println!("Transfer submitted idx={} result={}", idx, res);
-            return Ok(());
-        }
-    }
-    Err(anyhow!("Failed to submit!"))
+) -> Result<Submission, Error> {
+    Ok(Submission::new(xfer.xfer, idx, result_tail.clone()))
 }
 
 unsafe fn rusb_event_loop() {
