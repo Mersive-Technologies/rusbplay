@@ -74,20 +74,19 @@ unsafe fn run() -> Result<(), Error> {
     }).ok_or(anyhow!("Error finding item!"))?;
     println!("dev={:?}", dev);
     let mut handle = dev.open().context("Error opening device!")?;
-    if handle.kernel_driver_active(cfg.iface).unwrap() {
-        handle.detach_kernel_driver(cfg.iface).unwrap();
+    if handle.kernel_driver_active(cfg.iface).context(anyhow!("Error checking kernel"))? {
+        handle.detach_kernel_driver(cfg.iface).context("Error detatching kernel")?;
     }
-    handle.claim_interface(cfg.iface).unwrap();
+    handle.claim_interface(cfg.iface).context(anyhow!("Error claiming interface"))?;
     
     // allocate transfer
     let mut buffers: Vec<Vec<i16>> = (0..cfg.buff_cnt).map(|_| vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2]).collect();
-    let (xfers, errors): (Vec<_>, Vec<_>) = buffers.iter_mut().map(|mut b|
-        alloc_xfer(&cfg, &mut handle, &mut b)
-    ).partition(Result::is_ok);
-    for e in errors {
-        e.context("Error allocating transfer")?;
+
+    let mut xfers = vec![];
+    for mut buffer in buffers.iter_mut() {
+        let xfer = alloc_xfer(&cfg, &mut handle, &mut buffer).context(anyhow!("Error allocating transfer"))?;
+        xfers.push(xfer);
     }
-    let mut xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
 
     let (result_tail, mut result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
 
@@ -130,8 +129,8 @@ unsafe fn submit(cfg: &Config, idx: usize, xfer: *mut libusb_transfer,
             println!("Transfer submitted idx={} result={}", idx, res);
             return Ok(());
         }
-        handle.set_alternate_setting(cfg.iface, cfg.set_disable).unwrap();
-        handle.set_alternate_setting(cfg.iface, cfg.set_enabled).unwrap();
+        handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
+        handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
     }
     Err(anyhow!("Failed to submit!"))
 }
