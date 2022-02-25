@@ -27,7 +27,8 @@ pub struct TransferResult {
 
 pub struct TransferContext {
     pub idx: usize,
-    result_tail: Sender<TransferResult>,
+    pub result_tail: Sender<TransferResult>,
+    pub waker: Waker,
 }
 
 pub struct Transfer {
@@ -72,13 +73,14 @@ impl Future for Submission {
     fn poll(mut self: Pin<&mut Self>, cx: &mut futures::task::Context<'_>) -> Poll<Self::Output> {
         if self.submitted == false {
             let ctx = Box::new(TransferContext {
+                waker: cx.waker().clone(),
                 idx: self.idx,
                 result_tail: self.result_tail.clone()
             });
             unsafe {
                 (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
                 let res = libusb_submit_transfer(self.xfer);
-                return if res == 0 {
+                if res == 0 {
                     println!("Transfer submitted idx={} result={}", self.idx, res);
                     Poll::Pending
                 } else {
@@ -86,9 +88,13 @@ impl Future for Submission {
                     Poll::Ready(Err(anyhow!("libusb_submit_transfer error: {}", res)))
                 }
             }
+        } else {
+            if let Some(res) = self.result.take() {
+                Poll::Ready(res)
+            } else {
+                Poll::Pending
+            }
         }
-        println!("Polled");
-        Poll::Pending
     }
 }
 
@@ -252,4 +258,5 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
         actual_length: xfer.actual_length,
     };
     let _ = ctx.result_tail.send(result);
+    ctx.waker.wake();
 }
