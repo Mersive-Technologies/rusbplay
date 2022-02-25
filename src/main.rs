@@ -74,6 +74,9 @@ unsafe fn run() -> Result<(), Error> {
     }).ok_or(anyhow!("Error finding item!"))?;
     println!("dev={:?}", dev);
     let mut handle = dev.open().context("Error opening device!")?;
+    if handle.kernel_driver_active(cfg.iface).unwrap() {
+        handle.detach_kernel_driver(cfg.iface).unwrap();
+    }
     handle.claim_interface(cfg.iface).unwrap();
     
     // allocate transfer
@@ -99,11 +102,16 @@ unsafe fn run() -> Result<(), Error> {
     loop {
         let timeout = Duration::from_millis(100);
         GlobalContext::default().handle_events(Some(timeout)).context("Error handling events!")?;
-        while let Some(res) = result_head.try_next()? {
-            let xfer = &mut xfers[res.idx];
-            let buffer = &mut buffers[res.idx];
-            fill_buff(buffer, &mut samp_idx);
-            submit(&cfg, res.idx, *xfer, &mut handle, &result_tail)?;
+        println!("Handled events");
+        while let Ok(res) = result_head.try_next() {
+            println!("Got next");
+            if let Some(res) = res {
+                println!("Has next");
+                let xfer = &mut xfers[res.idx];
+                let buffer = &mut buffers[res.idx];
+                fill_buff(buffer, &mut samp_idx);
+                submit(&cfg, res.idx, *xfer, &mut handle, &result_tail)?;
+            }
         }
     }
 }
@@ -119,8 +127,8 @@ unsafe fn submit(cfg: &Config, idx: usize, xfer: *mut libusb_transfer,
         (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
         let res = libusb_submit_transfer(xfer);
         if res == 0 {
-            println!("Transfer submitted {}", res);
-            break;
+            println!("Transfer submitted idx={} result={}", idx, res);
+            return Ok(());
         }
         handle.set_alternate_setting(cfg.iface, cfg.set_disable).unwrap();
         handle.set_alternate_setting(cfg.iface, cfg.set_enabled).unwrap();
