@@ -26,6 +26,21 @@ pub struct TransferContext {
     result_tail: Sender<TransferResult>,
 }
 
+pub struct Transfer {
+    pub buff: Vec<i16>,
+    pub xfer: *mut libusb_transfer,
+}
+
+impl Transfer {
+    fn new(cfg: &Config, mut handle: &mut DeviceHandle<GlobalContext>) -> Result<Transfer, Error> {
+        unsafe {
+            let mut buff = vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2];
+            let xfer = alloc_xfer(&cfg, &mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
+            return Ok(Transfer { buff, xfer });
+        }
+    }
+}
+
 pub struct Config {
     pub vid: u16, // VendorID of USB digital-analog converter
     pub pid: u16, // ProductID of USB digital-analog converter
@@ -69,41 +84,38 @@ unsafe fn run() -> Result<(), Error> {
     let mut handle = open_dev(&cfg).context(anyhow!("Error opening device"))?;
 
     // allocate transfer
-    let mut buffers: Vec<Vec<i16>> = (0..cfg.buff_cnt).map(|_| vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2]).collect();
     let mut xfers = vec![];
-    for mut buffer in buffers.iter_mut() {
-        let xfer = alloc_xfer(&cfg, &mut handle, &mut buffer).context(anyhow!("Error allocating transfer"))?;
-        xfers.push(xfer);
+    for _ in 0..cfg.buff_cnt {
+        xfers.push(Transfer::new(&cfg, &mut handle).context("Error creating transfer")?);
     }
 
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
 
     let mut samp_idx = 0;
     for idx in 0..xfers.len() {
-        submit(&cfg, idx, &mut xfers, &mut buffers, &mut samp_idx, &mut handle, &result_tail)?;
+        submit(&cfg, idx, &mut xfers, &mut samp_idx, &mut handle, &result_tail)?;
     }
 
     while let Ok(res) = result_head.recv() {
-        submit(&cfg, res.idx, &mut xfers, &mut buffers, &mut samp_idx, &mut handle, &result_tail)?;
+        submit(&cfg, res.idx, &mut xfers, &mut samp_idx, &mut handle, &result_tail)?;
     }
 
     Ok(())
 }
 
-unsafe fn submit(cfg: &Config, idx: usize, xfers: &mut Vec<*mut libusb_transfer>,
-                 buffers: &mut Vec<Vec<i16>>, samp_idx: &mut usize,
+unsafe fn submit(cfg: &Config, idx: usize, xfers: &mut Vec<Transfer>,
+                 samp_idx: &mut usize,
                  handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
 ) -> Result<(), Error> {
-    let xfer = xfers[idx];
-    let buffer = &mut buffers[idx];
-    fill_buff(buffer, samp_idx);
+    let mut xfer = &mut xfers[idx];
+    fill_buff(&mut xfer.buff, samp_idx);
     for _ in 0..2 {
         let ctx = Box::new(TransferContext {
             idx,
             result_tail: result_tail.clone()
         });
-        (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-        let res = libusb_submit_transfer(xfer);
+        (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+        let res = libusb_submit_transfer(xfer.xfer);
         if res == 0 {
             println!("Transfer submitted idx={} result={}", idx, res);
             return Ok(());
