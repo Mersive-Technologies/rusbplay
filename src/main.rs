@@ -78,37 +78,33 @@ unsafe fn run() -> Result<(), Error> {
     
     // allocate transfer
     let mut buffers: Vec<Vec<i16>> = (0..cfg.buff_cnt).map(|_| vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2]).collect();
-    let (xfers, errors): (Vec<_>, Vec<_>) = buffers.iter().map(|mut b|
+    let (xfers, errors): (Vec<_>, Vec<_>) = buffers.iter_mut().map(|mut b|
         alloc_xfer(&cfg, &mut handle, &mut b)
     ).partition(Result::is_ok);
-    if let Some(e) = errors.first() {
+    for e in errors {
         e.context("Error allocating transfer")?;
     }
     let mut xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
 
-    let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
+    let (result_tail, mut result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
 
     let mut samp_idx = 0;
     for idx in 0..xfers.len() {
-        let mut xfer = &mut xfers[idx];
-        let mut buffer = &mut buffers[idx];
+        let xfer = &mut xfers[idx];
+        let buffer = &mut buffers[idx];
         fill_buff(buffer, &mut samp_idx);
         submit(&cfg, idx, *xfer, &mut handle, &result_tail)?;
     }
 
     loop {
-
-        submit(&cfg, &mut handle, &result_tail);
-
         let timeout = Duration::from_millis(100);
-        loop {
-            println!("Handling events");
-            GlobalContext::default().handle_events(Some(timeout)).context("Error handling events!")?;
-            if done.load(Ordering::Relaxed) {
-                break;
-            }
+        GlobalContext::default().handle_events(Some(timeout)).context("Error handling events!")?;
+        while let Some(res) = result_head.try_next()? {
+            let xfer = &mut xfers[res.idx];
+            let buffer = &mut buffers[res.idx];
+            fill_buff(buffer, &mut samp_idx);
+            submit(&cfg, res.idx, *xfer, &mut handle, &result_tail)?;
         }
-        println!("Handled events");
     }
 }
 
@@ -178,7 +174,7 @@ unsafe fn alloc_xfer(cfg: &Config,
 
 extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
     println!("Transfer complete!");
-    let ctx = unsafe {
+    let mut ctx = unsafe {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
     let xfer = unsafe { &*xfer };
@@ -188,5 +184,5 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
         status: xfer.status,
         actual_length: xfer.actual_length,
     };
-    ctx.result_tail.send(result);
+    let _ = ctx.result_tail.send(result);
 }
