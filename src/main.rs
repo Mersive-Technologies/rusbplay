@@ -81,6 +81,7 @@ impl Future for Submission {
                 (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
                 let res = libusb_submit_transfer(self.xfer);
                 if res == 0 {
+                    self.submitted = true;
                     println!("Transfer submitted idx={} result={}", self.idx, res);
                     Poll::Pending
                 } else {
@@ -90,8 +91,10 @@ impl Future for Submission {
             }
         } else {
             if let Some(res) = self.result.take() {
+                println!("Polled complete");
                 Poll::Ready(res)
             } else {
+                println!("Polled pending");
                 Poll::Pending
             }
         }
@@ -149,18 +152,25 @@ async unsafe fn run() -> Result<(), Error> {
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
 
     let mut samp_idx = 0;
-    for (idx, mut xfer) in xfers.iter_mut().enumerate() {
+    let mut submissions: Vec<Submission> = xfers.iter_mut().enumerate().map(|(idx, mut xfer)| {
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(idx, &mut xfer, &result_tail)?.await;
-    }
+        submit(idx, &mut xfer, &result_tail).unwrap()
+    }).collect();
+    loop {
+        let (res, idx, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
+        // res.context("Error transferring")?;
+        if res.is_err() {
+            handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
+            handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
+        }
+        let mut xfer = &mut xfers[idx];
 
-    while let Ok(res) = result_head.recv() {
-        let xfer = &mut xfers[res.idx];
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(res.idx, xfer, &result_tail)?.await;
-    }
+        let submission = submit(idx, &mut xfer, &result_tail).context("Error submitting!")?;
+        remaining.push(submission);
 
-    Ok(())
+        submissions = remaining;
+    }
 }
 
 unsafe fn submit(
