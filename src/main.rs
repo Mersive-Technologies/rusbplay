@@ -10,7 +10,7 @@ use futures::task::{Poll, Waker};
 use std::os::raw::c_uchar;
 use std::pin::Pin;
 use std::ptr::null_mut;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use futures::channel::oneshot::{Sender, Receiver, channel};
 use std::thread;
 use std::time::Duration;
 use anyhow::{Context, Error};
@@ -48,19 +48,20 @@ impl Transfer {
 
 pub struct Submission {
     xfer: *mut libusb_transfer,
-    result: Option<Result<TransferResult, Error>>,
-    result_tail: Sender<TransferResult>,
+    result_head: Receiver<TransferResult>,
+    result_tail: Option<Sender<TransferResult>>,
     idx: usize,
     submitted: bool,
 }
 
 impl Submission {
-    pub fn new(xfer: *mut libusb_transfer, idx: usize, result_tail: Sender<TransferResult>
+    pub fn new(xfer: *mut libusb_transfer, idx: usize
 ) -> Submission {
+        let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
         Submission {
             xfer,
-            result: None,
-            result_tail,
+            result_head,
+            result_tail: Some(result_tail),
             idx,
             submitted: false,
         }
@@ -71,11 +72,11 @@ impl Future for Submission {
     type Output = Result<TransferResult, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut futures::task::Context<'_>) -> Poll<Self::Output> {
-        if self.submitted == false {
+        if self.result_tail.is_some() {
             let ctx = Box::new(TransferContext {
                 waker: cx.waker().clone(),
                 idx: self.idx,
-                result_tail: self.result_tail.clone()
+                result_tail: self.result_tail.take().unwrap()
             });
             unsafe {
                 (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
@@ -90,12 +91,18 @@ impl Future for Submission {
                 }
             }
         } else {
-            if let Some(res) = self.result.take() {
-                println!("Polled complete");
-                Poll::Ready(res)
+            let res = self.result_head.try_recv();
+            if res.is_err() {
+                error!("Error getting transfer result: {:?}", &res);
+                Poll::Ready(Err(Error::from(res.err().unwrap())))
             } else {
-                println!("Polled pending");
-                Poll::Pending
+                let res = res.unwrap();
+                if res.is_some() {
+                    trace!("Got transfer result!");
+                    Poll::Ready(Ok(res.unwrap()))
+                } else {
+                    Poll::Pending
+                }
             }
         }
     }
@@ -149,24 +156,22 @@ async unsafe fn run() -> Result<(), Error> {
         xfers.push(Transfer::new(&cfg, &mut handle).context("Error creating transfer")?);
     }
 
-    let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
-
     let mut samp_idx = 0;
     let mut submissions: Vec<Submission> = xfers.iter_mut().enumerate().map(|(idx, mut xfer)| {
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(idx, &mut xfer, &result_tail).unwrap()
+        submit(idx, &mut xfer).unwrap()
     }).collect();
     loop {
         let (res, idx, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
-        // res.context("Error transferring")?;
         if res.is_err() {
             handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
             handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
         }
+        println!("Transfer {} complete", idx);
         let mut xfer = &mut xfers[idx];
 
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        let submission = submit(idx, &mut xfer, &result_tail).context("Error submitting!")?;
+        let submission = submit(idx, &mut xfer).context("Error submitting!")?;
         remaining.push(submission);
 
         submissions = remaining;
@@ -174,9 +179,9 @@ async unsafe fn run() -> Result<(), Error> {
 }
 
 unsafe fn submit(
-    idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>
+    idx: usize, xfer: &mut Transfer
 ) -> Result<Submission, Error> {
-    Ok(Submission::new(xfer.xfer, idx, result_tail.clone()))
+    Ok(Submission::new(xfer.xfer, idx))
 }
 
 unsafe fn rusb_event_loop() {
