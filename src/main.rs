@@ -75,31 +75,17 @@ unsafe fn run() -> Result<(), Error> {
     let xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
 
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
-    let done = Arc::new(AtomicBool::new(false));
 
-    for(let xfer in xfers) {
-
+    for xfer in &xfers {
+        submit(iface, set_enabled, set_disable, &mut handle, &result_tail)?;
     }
 
     let mut samp_idx = 0;
     loop {
         fill_buff(&mut buffer, &mut samp_idx);
 
-        for _ in 0..2 {
-            done.store(false, Ordering::Relaxed);
-            let ctx = Box::new(TransferContext {
-                idx: buff_idx,
-                result_tail: result_tail.clone()
-            });
-            (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-            let res = libusb_submit_transfer(xfer);
-            if res == 0 {
-                println!("Transfer submitted {}", res);
-                break;
-            }
-            handle.set_alternate_setting(iface, set_disable).unwrap();
-            handle.set_alternate_setting(iface, set_enabled).unwrap();
-        }
+        submit(iface, set_enabled, set_disable, &mut handle, &result_tail);
+
         let timeout = Duration::from_millis(100);
         loop {
             println!("Handling events");
@@ -110,6 +96,26 @@ unsafe fn run() -> Result<(), Error> {
         }
         println!("Handled events");
     }
+}
+
+unsafe fn submit(iface: u8, set_enabled: u8, set_disable: u8, idx: usize,
+                 handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
+) -> Result<(), Error> {
+    for _ in 0..2 {
+        let ctx = Box::new(TransferContext {
+            idx,
+            result_tail: result_tail.clone()
+        });
+        (*xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+        let res = libusb_submit_transfer(xfer);
+        if res == 0 {
+            println!("Transfer submitted {}", res);
+            break;
+        }
+        handle.set_alternate_setting(iface, set_disable).unwrap();
+        handle.set_alternate_setting(iface, set_enabled).unwrap();
+    }
+    Err(anyhow!("Failed to submit!"))
 }
 
 unsafe fn fill_buff(buffer: &mut Vec<i16>, samp_idx: &mut usize) {
