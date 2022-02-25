@@ -93,22 +93,22 @@ unsafe fn run() -> Result<(), Error> {
 
     let mut samp_idx = 0;
     for (idx, mut xfer) in xfers.iter_mut().enumerate() {
-        submit(&cfg, idx, &mut xfer, &mut samp_idx, &mut handle, &result_tail)?;
+        fill_buff(&mut xfer.buff, &mut samp_idx);
+        submit(&cfg, idx, &mut xfer, &mut handle, &result_tail)?;
     }
 
     while let Ok(res) = result_head.recv() {
         let xfer = &mut xfers[res.idx];
-        submit(&cfg, res.idx, xfer, &mut samp_idx, &mut handle, &result_tail)?;
+        fill_buff(&mut xfer.buff, &mut samp_idx);
+        submit(&cfg, res.idx, xfer, &mut handle, &result_tail)?;
     }
 
     Ok(())
 }
 
 unsafe fn submit(cfg: &Config, idx: usize, xfer: &mut Transfer,
-                 samp_idx: &mut usize,
                  handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
 ) -> Result<(), Error> {
-    fill_buff(&mut xfer.buff, samp_idx);
     for _ in 0..2 {
         let ctx = Box::new(TransferContext {
             idx,
