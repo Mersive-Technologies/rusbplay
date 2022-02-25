@@ -84,15 +84,16 @@ unsafe fn run() -> Result<(), Error> {
     if let Some(e) = errors.first() {
         e.context("Error allocating transfer")?;
     }
-    let xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
+    let mut xfers: Vec<_> = xfers.into_iter().map(Result::unwrap).collect();
 
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
 
     let mut samp_idx = 0;
-    for (idx, xfer) in xfers.iter().enumerate() {
+    for idx in 0..xfers.len() {
+        let mut xfer = &mut xfers[idx];
         let mut buffer = &mut buffers[idx];
         fill_buff(buffer, &mut samp_idx);
-        submit(&cfg, idx, &mut handle, &result_tail)?;
+        submit(&cfg, idx, *xfer, &mut handle, &result_tail)?;
     }
 
     loop {
@@ -111,7 +112,7 @@ unsafe fn run() -> Result<(), Error> {
     }
 }
 
-unsafe fn submit(cfg: &Config, idx: usize,
+unsafe fn submit(cfg: &Config, idx: usize, xfer: *mut libusb_transfer,
                  handle: &mut DeviceHandle<GlobalContext>, result_tail: &Sender<TransferResult>
 ) -> Result<(), Error> {
     for _ in 0..2 {
