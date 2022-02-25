@@ -6,10 +6,11 @@ extern crate anyhow;
 use std::ffi::c_void;
 use std::os::raw::c_uchar;
 use std::ptr::null_mut;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::thread;
 use std::time::Duration;
 use anyhow::{Context, Error};
-use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use libusb1_sys::constants::LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
 use libusb1_sys::{libusb_alloc_transfer, libusb_submit_transfer, libusb_transfer};
 use rusb::{DeviceHandle, DeviceList, GlobalContext, UsbContext};
@@ -63,6 +64,8 @@ unsafe fn run() -> Result<(), Error> {
         buff_cnt: 2,
     };
 
+    rusb_event_loop();
+
     // Find and open device
     let mut handle = open_dev(&cfg).context(anyhow!("Error opening device"))?;
 
@@ -74,7 +77,7 @@ unsafe fn run() -> Result<(), Error> {
         xfers.push(xfer);
     }
 
-    let (result_tail, mut result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel(0);
+    let (result_tail, mut result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
 
     let mut samp_idx = 0;
     for idx in 0..xfers.len() {
@@ -85,20 +88,26 @@ unsafe fn run() -> Result<(), Error> {
     }
 
     loop {
-        let timeout = Duration::from_millis(100);
-        GlobalContext::default().handle_events(Some(timeout)).context("Error handling events!")?;
-        println!("Handled events");
-        while let Ok(res) = result_head.try_next() {
-            println!("Got next");
-            if let Some(res) = res {
-                println!("Has next");
-                let xfer = &mut xfers[res.idx];
-                let buffer = &mut buffers[res.idx];
-                fill_buff(buffer, &mut samp_idx);
-                submit(&cfg, res.idx, *xfer, &mut handle, &result_tail)?;
-            }
+        while let Ok(res) = result_head.recv() {
+            println!("Has next");
+            let xfer = &mut xfers[res.idx];
+            let buffer = &mut buffers[res.idx];
+            fill_buff(buffer, &mut samp_idx);
+            submit(&cfg, res.idx, *xfer, &mut handle, &result_tail)?;
         }
     }
+}
+
+unsafe fn rusb_event_loop() {
+    let _ = thread::spawn(move || {
+        let timeout = Duration::from_millis(100);
+        loop {
+            let res = GlobalContext::default().handle_events(Some(timeout));
+            if res.is_err() {
+                error!("Error processing rusb events: {:?}", res.err());
+            }
+        }
+    });
 }
 
 unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
