@@ -163,17 +163,10 @@ async unsafe fn run() -> Result<(), Error> {
         submissions.push(submission);
     }
     loop {
-        let (res, idx, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
-        let mut res_idx = 99usize;
-        if res.is_err() {
-            info!("Resetting");
-            handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
-            handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
-        } else {
-            res_idx = res.unwrap().idx;
-        }
-        let mut xfer = &mut xfers[idx];
-        info!("Transfer {}/{}/{} complete", xfer.idx, res_idx, idx);
+        let (res, _, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
+        let res = res.context("Error selecting!")?;
+        let mut xfer = &mut xfers[res.idx];
+        info!("Transfer {}/{} complete", xfer.idx, res.idx);
 
         fill_buff(&mut xfer.buff, &mut samp_idx);
         let submission = submit(xfer.idx, &mut xfer).context("Error submitting!")?;
