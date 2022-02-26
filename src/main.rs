@@ -16,38 +16,28 @@ use anyhow::{Context, Error};
 
 fn main() -> Result<(), Error> {
     pretty_env_logger::init_timed();
-
     executor::block_on(run())?;
-
     Ok(())
 }
 
 async fn run() -> Result<(), Error> {
-    // do math
-    let cfg = Config {
-        vid: 0x0bda,
-        pid: 0x48a8,
-        iface: 2,
-        ep: 4,
-        set_enabled: 2,
-        set_disable: 0,
-        pkt_sz: 192,
-        pkt_cnt: 10,
-        buff_cnt: 3,
+    let cfg = Config { vid: 0x0bda, pid: 0x48a8, iface: 2, ep: 4, set_enabled: 2, set_disable: 0,
+        pkt_sz: 192, pkt_cnt: 10, buff_cnt: 3,
     };
-
     rusb_event_loop();
-
-    // Find and open device
     let mut handle = open_dev(&cfg).context(anyhow!("Error opening device"))?;
 
-    // allocate transfer
+    // allocate transfers
     let mut samp_idx = 0;
     let mut xfers = vec![];
     for idx in 0usize..cfg.buff_cnt {
         xfers.push(Transfer::new( idx, &cfg, &mut handle).context("Error creating transfer")?);
     }
+
+    // Submit transfers to bus
     let mut subs: Vec<_> = xfers.iter_mut().map(|xfer| xfer.submit(&mut samp_idx)).collect();
+
+    // Re-submit each time a transfer completes
     loop {
         let (res, _, mut compl) = select_all(subs.into_iter()).await;
         let res = res.context("Error selecting!")?;
