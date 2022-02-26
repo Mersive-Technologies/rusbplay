@@ -70,6 +70,12 @@ impl Submission {
     }
 }
 
+impl Drop for Submission {
+    fn drop(&mut self) {
+        info!("Dropped submission {}", self.idx);
+    }
+}
+
 impl Future for Submission {
     type Output = Result<TransferResult, Error>;
 
