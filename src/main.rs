@@ -32,16 +32,17 @@ pub struct TransferContext {
 }
 
 pub struct Transfer {
+    pub idx: usize,
     pub buff: Vec<i16>,
     pub xfer: *mut libusb_transfer,
 }
 
 impl Transfer {
-    fn new(cfg: &Config, mut handle: &mut DeviceHandle<GlobalContext>) -> Result<Transfer, Error> {
+    fn new(idx: usize, cfg: &Config, mut handle: &mut DeviceHandle<GlobalContext>) -> Result<Transfer, Error> {
         unsafe {
             let mut buff = vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2];
             let xfer = alloc_xfer(&cfg, &mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
-            return Ok(Transfer { buff, xfer });
+            return Ok(Transfer { idx, buff, xfer });
         }
     }
 }
@@ -83,7 +84,7 @@ impl Future for Submission {
                 let res = libusb_submit_transfer(self.xfer);
                 if res == 0 {
                     self.submitted = true;
-                    println!("Transfer submitted idx={} result={}", self.idx, res);
+                    info!("Transfer submitted idx={} result={}", self.idx, res);
                     Poll::Pending
                 } else {
                     error!("Submission failed!");
@@ -117,17 +118,16 @@ pub struct Config {
     pub set_disable: u8, // Standard is 0=disabled
     pub pkt_sz: usize, // 48000hz * 16bits * 2chan = 192,000byte/sec / 192 = 1ms of audio
     pub pkt_cnt: usize, // Each transfer contains 10ms of audio
-    pub buff_cnt: i32, // Number of buffers in ring
+    pub buff_cnt: usize, // Number of buffers in ring
 }
 
 fn main() -> Result<(), Error> {
-    println!("Hello, world!");
+    pretty_env_logger::init_timed();
 
     unsafe {
         executor::block_on(run())?;
     }
 
-    println!("Done!");
     Ok(())
 }
 
@@ -151,28 +151,29 @@ async unsafe fn run() -> Result<(), Error> {
     let mut handle = open_dev(&cfg).context(anyhow!("Error opening device"))?;
 
     // allocate transfer
-    let mut xfers = vec![];
-    for _ in 0..cfg.buff_cnt {
-        xfers.push(Transfer::new(&cfg, &mut handle).context("Error creating transfer")?);
-    }
-
     let mut samp_idx = 0;
-    let mut submissions: Vec<Submission> = xfers.iter_mut().enumerate().map(|(idx, mut xfer)| {
+    let mut xfers = vec![];
+    let mut submissions = vec![];
+    for idx in 0usize..cfg.buff_cnt {
+        xfers.push(Transfer::new( idx, &cfg, &mut handle).context("Error creating transfer")?);
+    }
+    for xfer in &mut xfers {
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(idx, &mut xfer).unwrap()
-    }).collect();
+        let submission = submit(xfer.idx, xfer).context("Error submitting!")?;
+        submissions.push(submission);
+    }
     loop {
         let (res, idx, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
         if res.is_err() {
-            println!("Resetting");
+            info!("Resetting");
             handle.set_alternate_setting(cfg.iface, cfg.set_disable).context(anyhow!("Error disabling"))?;
             handle.set_alternate_setting(cfg.iface, cfg.set_enabled).context(anyhow!("Error enabling"))?;
         }
-        println!("Transfer {} complete", idx);
         let mut xfer = &mut xfers[idx];
+        info!("Transfer {} complete", xfer.idx);
 
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        let submission = submit(idx, &mut xfer).context("Error submitting!")?;
+        let submission = submit(xfer.idx, &mut xfer).context("Error submitting!")?;
         remaining.push(submission);
 
         submissions = remaining;
@@ -206,7 +207,7 @@ unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
             _ => false
         }
     }).ok_or(anyhow!("Error finding item!"))?;
-    println!("dev={:?}", dev);
+    info!("dev={:?}", dev);
     let mut handle = dev.open().context("Error opening device!")?;
     if handle.kernel_driver_active(cfg.iface).context(anyhow!("Error checking kernel"))? {
         handle.detach_kernel_driver(cfg.iface).context("Error detatching kernel")?;
@@ -262,12 +263,11 @@ unsafe fn alloc_xfer(cfg: &Config,
 }
 
 extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
-    println!("Transfer complete!");
     let ctx = unsafe {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
     let xfer = unsafe { &*xfer };
-    trace!("Transfer completed with status: {}", xfer.status);
+    info!("ISO transfer {} complete!", ctx.idx);
     let result = TransferResult {
         idx: ctx.idx,
         status: xfer.status,
