@@ -45,6 +45,10 @@ impl Transfer {
             return Ok(Transfer { idx, buff, xfer });
         }
     }
+
+    unsafe fn submit(&self) -> Submission {
+        Submission::new(self)
+    }
 }
 
 pub struct Submission {
@@ -52,19 +56,16 @@ pub struct Submission {
     result_head: Receiver<TransferResult>,
     result_tail: Option<Sender<TransferResult>>,
     idx: usize,
-    submitted: bool,
 }
 
 impl Submission {
-    pub fn new(xfer: *mut libusb_transfer, idx: usize
-) -> Submission {
+    pub fn new(xfer: &Transfer) -> Submission {
         let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
         Submission {
-            xfer,
+            xfer: xfer.xfer,
             result_head,
             result_tail: Some(result_tail),
-            idx,
-            submitted: false,
+            idx: xfer.idx,
         }
     }
 }
@@ -83,7 +84,6 @@ impl Future for Submission {
                 (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
                 let res = libusb_submit_transfer(self.xfer);
                 if res == 0 {
-                    self.submitted = true;
                     info!("Transfer submitted idx={} result={}", self.idx, res);
                     Poll::Pending
                 } else {
@@ -155,27 +155,21 @@ async unsafe fn run() -> Result<(), Error> {
     }
     for xfer in &mut xfers {
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        let submission = submit(xfer.idx, xfer).context("Error submitting!")?;
+        let submission = xfer.submit();
         submissions.push(submission);
     }
     loop {
         let (res, _, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
         let res = res.context("Error selecting!")?;
-        let mut xfer = &mut xfers[res.idx];
+        let xfer = &mut xfers[res.idx];
         info!("Transfer {}/{} complete", xfer.idx, res.idx);
 
         fill_buff(&mut xfer.buff, &mut samp_idx);
-        let submission = submit(xfer.idx, &mut xfer).context("Error submitting!")?;
+        let submission = xfer.submit();
         remaining.push(submission);
 
         submissions = remaining;
     }
-}
-
-unsafe fn submit(
-    idx: usize, xfer: &mut Transfer
-) -> Result<Submission, Error> {
-    Ok(Submission::new(xfer.xfer, idx))
 }
 
 unsafe fn rusb_event_loop() {
@@ -232,7 +226,7 @@ unsafe fn alloc_xfer(cfg: &Config,
     let sz = cfg.pkt_cnt * cfg.pkt_sz;
     let mut xfer = *&libusb_alloc_transfer(cfg.pkt_cnt as i32);
     if xfer == null_mut() {
-        Err(anyhow!("libusb_alloc_transfer failed!"))?;
+        return Err(anyhow!("libusb_alloc_transfer failed!"));
     }
     (*xfer).dev_handle = handle.as_raw();
     (*xfer).endpoint = cfg.ep;
