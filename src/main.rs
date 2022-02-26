@@ -8,7 +8,7 @@ extern crate log;
 extern crate anyhow;
 
 use crate::transfer::Transfer;
-use crate::util::{Config, fill_buff, open_dev, rusb_event_loop};
+use crate::util::{Config, open_dev, rusb_event_loop};
 
 use futures::executor;
 use anyhow::{Context, Error};
@@ -43,25 +43,19 @@ async fn run() -> Result<(), Error> {
     // allocate transfer
     let mut samp_idx = 0;
     let mut xfers = vec![];
-    let mut submissions = vec![];
     for idx in 0usize..cfg.buff_cnt {
         xfers.push(Transfer::new( idx, &cfg, &mut handle).context("Error creating transfer")?);
     }
-    for xfer in &mut xfers {
-        fill_buff(&mut xfer.buff, &mut samp_idx);
-        let submission = xfer.submit();
-        submissions.push(submission);
-    }
+    let mut submissions: Vec<_> = xfers.iter_mut().map(|xfer| {
+        xfer.submit(&mut samp_idx)
+    }).collect();
     loop {
         let (res, _, mut remaining) = futures::future::select_all(submissions.into_iter()).await;
         let res = res.context("Error selecting!")?;
         let xfer = &mut xfers[res.idx];
         info!("Transfer {}/{} complete", xfer.idx, res.idx);
 
-        fill_buff(&mut xfer.buff, &mut samp_idx);
-        let submission = xfer.submit();
-        remaining.push(submission);
-
+        remaining.push(xfer.submit(&mut samp_idx));
         submissions = remaining;
     }
 }

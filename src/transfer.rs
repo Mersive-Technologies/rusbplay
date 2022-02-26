@@ -1,4 +1,4 @@
-use crate::util::Config;
+use crate::util::{Config, fill_buff};
 use crate::submission::Submission;
 
 use futures::task::{Waker};
@@ -37,7 +37,8 @@ impl Transfer {
         }
     }
 
-    pub fn submit(&self) -> Submission {
+    pub fn submit(&mut self, samp_idx: &mut usize) -> Submission {
+        fill_buff(&mut self.buff, samp_idx);
         Submission::new(self)
     }
 }
