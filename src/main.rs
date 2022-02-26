@@ -73,11 +73,11 @@ impl Future for Submission {
     type Output = Result<TransferResult, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut futures::task::Context<'_>) -> Poll<Self::Output> {
-        if self.result_tail.is_some() {
+        if let Some(result_tail) = self.result_tail.take() {
             let ctx = Box::new(TransferContext {
                 waker: cx.waker().clone(),
                 idx: self.idx,
-                result_tail: self.result_tail.take().unwrap()
+                result_tail,
             });
             unsafe {
                 (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
@@ -93,17 +93,13 @@ impl Future for Submission {
             }
         } else {
             let res = self.result_head.try_recv();
-            if res.is_err() {
-                error!("Error getting transfer result: {:?}", &res);
-                Poll::Ready(Err(Error::from(res.err().unwrap())))
-            } else {
-                let res = res.unwrap();
-                if res.is_some() {
-                    trace!("Got transfer result!");
-                    Poll::Ready(Ok(res.unwrap()))
-                } else {
-                    Poll::Pending
-                }
+            match res {
+                Err(e) => {
+                    error!("Error getting transfer result: {:?}", &res);
+                    Poll::Ready(Err(Error::from(e)))
+                },
+                Ok(Some(res)) => Poll::Ready(Ok(res)),
+                _ => Poll::Pending
             }
         }
     }
