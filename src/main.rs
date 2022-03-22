@@ -42,7 +42,7 @@ async fn msg_loop() -> Result<(), Error> {
     info!("Found {} devices", list.len());
     let dev = list.iter().find(|dev| {
         let desc = dev.device_descriptor().unwrap();
-        desc.vendor_id() == 0x046d && desc.product_id() == 0x0867
+        desc.vendor_id() == 0x0bda && desc.product_id() == 0x48a8
     }).ok_or(anyhow!("Error finding item!"))?;
     info!("dev={:?}", dev);
     let mut handle = dev.open().unwrap();
@@ -57,25 +57,25 @@ async fn msg_loop() -> Result<(), Error> {
     handle.set_alternate_setting(1, 0).unwrap();
     handle.set_alternate_setting(2, 0).unwrap();
 
-    handle.write_control(0x21, 0x0a, 0x0000, 0x03, &[0u8; 0], Duration::from_millis(0)); // set idle
-
-    handle.write_control(0x21, 1, 0x0200, 0x0200, &[0x4cu8, 0xfau8], Duration::from_millis(0)); // set speaker volume
-    handle.write_control(0x21, 1, 0x0200, 0x0600, &[0x60u8, 0xe7u8], Duration::from_millis(0)); // set mic volume
-
-    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
-    handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    // handle.write_control(0x21, 0x0a, 0x0000, 0x03, &[0u8; 0], Duration::from_millis(0)); // set idle
+    //
+    // handle.write_control(0x21, 1, 0x0200, 0x0200, &[0x4cu8, 0xfau8], Duration::from_millis(0)); // set speaker volume
+    // handle.write_control(0x21, 1, 0x0200, 0x0600, &[0x60u8, 0xe7u8], Duration::from_millis(0)); // set mic volume
+    //
+    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
+    // handle.write_control(0x21, 0x09, 0x0231, 0x03, &[0x31u8, 0x00u8], Duration::from_millis(0)); // set report
 
     // thread::sleep(Duration::from_millis(1000));
-    handle.set_alternate_setting(2, 1).unwrap();
+    handle.set_alternate_setting(2, 2).unwrap();
     thread::sleep(Duration::from_millis(250));
 
     let ctx = GlobalContext::default();;
-    let ep = 1;
+    let ep = 4;
     let pkt_cnt = 10;
-    let pkt_sz = 128;
+    let pkt_sz = 192;
     info!("Creating transfers...");
     let mut transfers: Vec<_> = (0..2).map(|_| Transfer::new(ctx, &handle, ep, pkt_cnt, pkt_sz).unwrap()).collect();
     info!("Submitting transfers...");
@@ -84,7 +84,7 @@ async fn msg_loop() -> Result<(), Error> {
 
     let volume = 0.8f32;
     let tone_hz = 440f32;
-    let samp_per_sec = 32000f32;
+    let samp_per_sec = 48000f32;
     let ang_per_samp = std::f32::consts::PI * 2f32 / samp_per_sec * tone_hz;
     let mut samp_idx = 0;
     loop {
@@ -93,13 +93,13 @@ async fn msg_loop() -> Result<(), Error> {
         if res.is_err() {
             error!("Error transferring: {:?}", res);
             handle.set_alternate_setting(2, 0).unwrap();
-            handle.set_alternate_setting(2, 1).unwrap();
+            handle.set_alternate_setting(2, 2).unwrap();
         } else {
             let status = res.unwrap().status;
             if status != 0 {
                 error!("Error transferring: {:?}", status);
                 handle.set_alternate_setting(2, 0).unwrap();
-                handle.set_alternate_setting(2, 1).unwrap();
+                handle.set_alternate_setting(2, 2).unwrap();
             }
         }
         let mut xfer = &mut transfers[idx];
