@@ -5,6 +5,7 @@ extern crate anyhow;
 #[macro_use]
 extern crate lazy_static;
 
+use futures::executor;
 use std::ffi::c_void;
 use std::os::raw::c_uchar;
 use std::pin::Pin;
@@ -89,14 +90,14 @@ fn main() -> Result<(), Error> {
     pretty_env_logger::init_timed();
 
     unsafe {
-        run()?;
+        executor::block_on(run())?;
     }
 
     info!("Done!");
     Ok(())
 }
 
-unsafe fn run() -> Result<(), Error> {
+async unsafe fn run() -> Result<(), Error> {
     rusb_event_loop();
 
     // Find and open device
