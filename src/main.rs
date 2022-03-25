@@ -96,20 +96,19 @@ unsafe fn run() -> Result<(), Error> {
 
     let mut samp_idx = 0;
     for (idx, mut xfer) in xfers.iter_mut().enumerate() {
-        fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(idx, &mut xfer, &result_tail)?;
+        submit(idx, &mut xfer, &result_tail, &mut samp_idx)?;
     }
 
     while let Ok(res) = result_head.recv() {
         let xfer = &mut xfers[res.idx];
-        fill_buff(&mut xfer.buff, &mut samp_idx);
-        submit(res.idx, xfer, &result_tail)?;
+        submit(res.idx, xfer, &result_tail, &mut samp_idx)?;
     }
 
     Ok(())
 }
 
-unsafe fn submit(idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>) -> Result<(), Error> {
+unsafe fn submit(idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<(), Error> {
+    fill_buff(&mut xfer.buff, &mut samp_idx);
     let ctx = Box::new(TransferContext {
         idx,
         result_tail: result_tail.clone()
