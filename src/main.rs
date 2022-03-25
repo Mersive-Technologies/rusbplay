@@ -33,6 +33,16 @@ pub struct Transfer {
     pub xfer: *mut libusb_transfer,
 }
 
+impl Transfer {
+    fn new(mut handle: &mut DeviceHandle<GlobalContext>) -> Result<Transfer, Error> {
+        unsafe {
+            let mut buff = vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2];
+            let xfer = alloc_xfer(&mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
+            return Ok(Transfer { buff, xfer });
+        }
+    }
+}
+
 pub struct Config {
     pub vid: u16, // VendorID of USB digital-analog converter
     pub pid: u16, // ProductID of USB digital-analog converter
@@ -79,9 +89,7 @@ unsafe fn run() -> Result<(), Error> {
     // allocate transfer
     let mut xfers = vec![];
     for _ in 0..cfg.buff_cnt {
-        let mut buff = vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2];
-        let xfer = alloc_xfer(&mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
-        xfers.push(Transfer { buff, xfer });
+        xfers.push(Transfer::new(&mut handle).context("Error creating transfer")?);
     }
 
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
