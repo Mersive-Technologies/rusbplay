@@ -10,12 +10,15 @@ use std::ffi::c_void;
 use std::os::raw::c_uchar;
 use std::pin::Pin;
 use std::ptr::null_mut;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::task::Poll;
 use std::thread;
 use std::time::Duration;
 use anyhow::{Context, Error};
+use futures::channel::oneshot;
+use futures::channel::oneshot::Canceled;
 use futures::Future;
+use futures::task::Waker;
 use libusb1_sys::constants::LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
 use libusb1_sys::{libusb_alloc_transfer, libusb_submit_transfer, libusb_transfer};
 use rusb::{DeviceHandle, DeviceList, GlobalContext, UsbContext};
@@ -29,7 +32,8 @@ pub struct TransferResult {
 
 pub struct TransferContext {
     pub idx: usize,
-    result_tail: Sender<TransferResult>,
+    result_tail: oneshot::Sender<TransferResult>,
+    pub waker: Waker,
 }
 
 pub struct Transfer {
@@ -51,25 +55,40 @@ impl Transfer {
 pub struct Submission {
     idx: usize,
     xfer: *mut libusb_transfer,
-    result_tail: Sender<TransferResult>
+    result_head: oneshot::Receiver<TransferResult>,
+    result_tail: Option<oneshot::Sender<TransferResult>>,
 }
 
 impl Future for Submission {
     type Output = Result<TransferResult, Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        let ctx = Box::new(TransferContext {
-            idx: self.idx,
-            result_tail: self.result_tail.clone()
-        });
-        unsafe {
-            (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-            let res = libusb_submit_transfer(self.xfer);
-            if res == 0 {
-                println!("Transfer submitted idx={} result={}", self.idx, res);
-                Poll::Pending
-            } else {
-                Poll::Ready(Err(anyhow!("libusb_submit_transfer error: {}", res)))
+        if let Some(result_tail) = self.result_tail.take() {
+            // First time
+            let ctx = Box::new(TransferContext {
+                idx: self.idx,
+                result_tail,
+                waker: cx.waker().clone(),
+            });
+            unsafe {
+                (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+                let res = libusb_submit_transfer(self.xfer);
+                if res == 0 {
+                    println!("Transfer submitted idx={} result={}", self.idx, res);
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Err(anyhow!("libusb_submit_transfer error: {}", res)))
+                }
+            }
+        } else {
+            println!("Woke!");
+            match self.result_head.try_recv() {
+                Ok(None) => Poll::Pending,
+                Ok(Some(res)) => {
+                    println!("Ok(res)");
+                    Poll::Ready(Ok(res))
+                },
+                Err(e) => Poll::Ready(Err(Error::from(e))),
             }
         }
     }
@@ -141,7 +160,8 @@ async unsafe fn run() -> Result<(), Error> {
 
 unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<Submission, Error> {
     fill_buff(&mut xfer.buff, &mut samp_idx);
-    Ok(Submission { idx: xfer.idx, xfer: xfer.xfer, result_tail: result_tail.clone() })
+    let (result_tail, result_head): (oneshot::Sender<TransferResult>, oneshot::Receiver<TransferResult>) = oneshot::channel();
+    Ok(Submission { idx: xfer.idx, xfer: xfer.xfer, result_head, result_tail: Some(result_tail) })
 }
 
 unsafe fn rusb_event_loop() {
@@ -230,4 +250,5 @@ extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
         actual_length: xfer.actual_length,
     };
     let _ = ctx.result_tail.send(result);
+    ctx.waker.wake()
 }
