@@ -7,11 +7,14 @@ extern crate lazy_static;
 
 use std::ffi::c_void;
 use std::os::raw::c_uchar;
+use std::pin::Pin;
 use std::ptr::null_mut;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::task::Poll;
 use std::thread;
 use std::time::Duration;
 use anyhow::{Context, Error};
+use futures::Future;
 use libusb1_sys::constants::LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
 use libusb1_sys::{libusb_alloc_transfer, libusb_submit_transfer, libusb_transfer};
 use rusb::{DeviceHandle, DeviceList, GlobalContext, UsbContext};
@@ -46,6 +49,14 @@ impl Transfer {
 
 pub struct Submission {
 
+}
+
+impl Future for Submission {
+    type Output = (TransferResult, Error);
+
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        todo!()
+    }
 }
 
 pub struct Config {
