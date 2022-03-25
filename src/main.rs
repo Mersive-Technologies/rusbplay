@@ -44,6 +44,10 @@ impl Transfer {
     }
 }
 
+pub struct Submission {
+
+}
+
 pub struct Config {
     pub vid: u16, // VendorID of USB digital-analog converter
     pub pid: u16, // ProductID of USB digital-analog converter
@@ -108,7 +112,7 @@ unsafe fn run() -> Result<(), Error> {
     Ok(())
 }
 
-unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<(), Error> {
+unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<Submission, Error> {
     fill_buff(&mut xfer.buff, &mut samp_idx);
     let ctx = Box::new(TransferContext {
         idx: xfer.idx,
@@ -118,7 +122,7 @@ unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut 
     let res = libusb_submit_transfer(xfer.xfer);
     if res == 0 {
         info!("Transfer submitted idx={} result={}", xfer.idx, res);
-        Ok(())
+        Ok(Submission {})
     } else {
         Err(anyhow!("Failed to submit!"))
     }
