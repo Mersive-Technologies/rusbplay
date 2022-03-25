@@ -49,14 +49,29 @@ impl Transfer {
 }
 
 pub struct Submission {
-
+    idx: usize,
+    xfer: *mut libusb_transfer,
+    result_tail: Sender<TransferResult>
 }
 
 impl Future for Submission {
-    type Output = (TransferResult, Error);
+    type Output = Result<TransferResult, Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        todo!()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let ctx = Box::new(TransferContext {
+            idx: self.idx,
+            result_tail: self.result_tail.clone()
+        });
+        unsafe {
+            (*self.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+            let res = libusb_submit_transfer(self.xfer);
+            if res == 0 {
+                println!("Transfer submitted idx={} result={}", self.idx, res);
+                Poll::Pending
+            } else {
+                Poll::Ready(Err(anyhow!("libusb_submit_transfer error: {}", res)))
+            }
+        }
     }
 }
 
@@ -126,18 +141,7 @@ async unsafe fn run() -> Result<(), Error> {
 
 unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<Submission, Error> {
     fill_buff(&mut xfer.buff, &mut samp_idx);
-    let ctx = Box::new(TransferContext {
-        idx: xfer.idx,
-        result_tail: result_tail.clone()
-    });
-    (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-    let res = libusb_submit_transfer(xfer.xfer);
-    if res == 0 {
-        info!("Transfer submitted idx={} result={}", xfer.idx, res);
-        Ok(Submission {})
-    } else {
-        Err(anyhow!("Failed to submit!"))
-    }
+    Ok(Submission { idx: xfer.idx, xfer: xfer.xfer, result_tail: result_tail.clone() })
 }
 
 unsafe fn rusb_event_loop() {
