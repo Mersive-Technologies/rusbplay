@@ -99,19 +99,18 @@ unsafe fn run() -> Result<(), Error> {
 }
 
 unsafe fn submit(idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>) -> Result<(), Error> {
-    for _ in 0..2 {
-        let ctx = Box::new(TransferContext {
-            idx,
-            result_tail: result_tail.clone()
-        });
-        (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
-        let res = libusb_submit_transfer(xfer.xfer);
-        if res == 0 {
-            println!("Transfer submitted idx={} result={}", idx, res);
-            return Ok(());
-        }
+    let ctx = Box::new(TransferContext {
+        idx,
+        result_tail: result_tail.clone()
+    });
+    (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
+    let res = libusb_submit_transfer(xfer.xfer);
+    if res == 0 {
+        println!("Transfer submitted idx={} result={}", idx, res);
+        Ok(())
+    } else {
+        Err(anyhow!("Failed to submit!"))
     }
-    Err(anyhow!("Failed to submit!"))
 }
 
 unsafe fn rusb_event_loop() {
