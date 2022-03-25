@@ -106,9 +106,7 @@ unsafe fn run() -> Result<(), Error> {
     Ok(())
 }
 
-unsafe fn submit(
-    idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>
-) -> Result<(), Error> {
+unsafe fn submit(idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>) -> Result<(), Error> {
     for _ in 0..2 {
         let ctx = Box::new(TransferContext {
             idx,
@@ -171,10 +169,7 @@ unsafe fn fill_buff(buffer: &mut Vec<i16>, samp_idx: &mut usize) {
     (*samp_idx) += buffer.len();
 }
 
-unsafe fn alloc_xfer(cfg: &Config,
-                     handle: &mut DeviceHandle<GlobalContext>,
-                     buffer: &mut Vec<i16>
-) -> Result<*mut libusb_transfer, Error> {
+unsafe fn alloc_xfer(cfg: &Config, handle: &mut DeviceHandle<GlobalContext>, buffer: &mut Vec<i16> ) -> Result<*mut libusb_transfer, Error> {
     let sz = cfg.pkt_cnt * cfg.pkt_sz;
     let mut xfer = *&libusb_alloc_transfer(cfg.pkt_cnt as i32);
     if xfer == null_mut() {
