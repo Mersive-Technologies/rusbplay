@@ -2,6 +2,8 @@
 extern crate log;
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate lazy_static;
 
 use std::ffi::c_void;
 use std::os::raw::c_uchar;
@@ -43,6 +45,20 @@ pub struct Config {
     pub buff_cnt: i32, // Number of buffers in ring
 }
 
+lazy_static! {
+    static ref cfg: Config = Config {
+        vid: 0x0bda,
+        pid: 0x48a8,
+        iface: 2,
+        ep: 4,
+        set_enabled: 2,
+        set_disable: 0,
+        pkt_sz: 192,
+        pkt_cnt: 10,
+        buff_cnt: 2,
+    };
+}
+
 fn main() -> Result<(), Error> {
     pretty_env_logger::init_timed();
 
@@ -55,29 +71,16 @@ fn main() -> Result<(), Error> {
 }
 
 unsafe fn run() -> Result<(), Error> {
-    // do math
-    let cfg = Config {
-        vid: 0x0bda,
-        pid: 0x48a8,
-        iface: 2,
-        ep: 4,
-        set_enabled: 2,
-        set_disable: 0,
-        pkt_sz: 192,
-        pkt_cnt: 10,
-        buff_cnt: 2,
-    };
-
     rusb_event_loop();
 
     // Find and open device
-    let mut handle = open_dev(&cfg).context(anyhow!("Error opening device"))?;
+    let mut handle = open_dev().context(anyhow!("Error opening device"))?;
 
     // allocate transfer
     let mut xfers = vec![];
     for _ in 0..cfg.buff_cnt {
         let mut buff = vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2];
-        let xfer = alloc_xfer(&cfg, &mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
+        let xfer = alloc_xfer(&mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
         xfers.push(Transfer { buff, xfer });
     }
 
@@ -125,7 +128,7 @@ unsafe fn rusb_event_loop() {
     });
 }
 
-unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
+unsafe fn open_dev() -> Result<DeviceHandle<GlobalContext>, Error> {
     let list = DeviceList::new()?;
     info!("Found {} devices", list.len());
     let dev = list.iter().find(|dev| {
@@ -160,7 +163,7 @@ unsafe fn fill_buff(buffer: &mut Vec<i16>, samp_idx: &mut usize) {
     (*samp_idx) += buffer.len();
 }
 
-unsafe fn alloc_xfer(cfg: &Config, handle: &mut DeviceHandle<GlobalContext>, buffer: &mut Vec<i16> ) -> Result<*mut libusb_transfer, Error> {
+unsafe fn alloc_xfer(handle: &mut DeviceHandle<GlobalContext>, buffer: &mut Vec<i16> ) -> Result<*mut libusb_transfer, Error> {
     let sz = cfg.pkt_cnt * cfg.pkt_sz;
     let mut xfer = *&libusb_alloc_transfer(cfg.pkt_cnt as i32);
     if xfer == null_mut() {
