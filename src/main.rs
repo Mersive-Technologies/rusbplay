@@ -44,13 +44,13 @@ pub struct Config {
 }
 
 fn main() -> Result<(), Error> {
-    println!("Hello, world!");
+    pretty_env_logger::init_timed();
 
     unsafe {
         run()?;
     }
 
-    println!("Done!");
+    info!("Done!");
     Ok(())
 }
 
@@ -106,7 +106,7 @@ unsafe fn submit(idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferR
     (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
     let res = libusb_submit_transfer(xfer.xfer);
     if res == 0 {
-        println!("Transfer submitted idx={} result={}", idx, res);
+        info!("Transfer submitted idx={} result={}", idx, res);
         Ok(())
     } else {
         Err(anyhow!("Failed to submit!"))
@@ -134,7 +134,7 @@ unsafe fn open_dev(cfg: &Config) -> Result<DeviceHandle<GlobalContext>, Error> {
             _ => false
         }
     }).ok_or(anyhow!("Error finding item!"))?;
-    println!("dev={:?}", dev);
+    info!("dev={:?}", dev);
     let mut handle = dev.open().context("Error opening device!")?;
     if handle.kernel_driver_active(cfg.iface).context(anyhow!("Error checking kernel"))? {
         handle.detach_kernel_driver(cfg.iface).context("Error detatching kernel")?;
@@ -187,7 +187,7 @@ unsafe fn alloc_xfer(cfg: &Config, handle: &mut DeviceHandle<GlobalContext>, buf
 }
 
 extern "system" fn iso_complete_handler(xfer: *mut libusb_transfer) {
-    println!("Transfer complete!");
+    info!("Transfer complete!");
     let ctx = unsafe {
         Box::from_raw((*xfer).user_data as *mut TransferContext)
     };
