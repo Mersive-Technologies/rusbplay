@@ -5,6 +5,7 @@ extern crate anyhow;
 #[macro_use]
 extern crate lazy_static;
 
+use futures::future::select_all;
 use futures::executor;
 use std::ffi::c_void;
 use std::os::raw::c_uchar;
@@ -146,22 +147,25 @@ async unsafe fn run() -> Result<(), Error> {
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
 
     let mut samp_idx = 0;
-    for mut xfer in xfers.iter_mut() {
-        submit(&mut xfer, &result_tail, &mut samp_idx)?.await;
-    }
+    let mut submissions: Vec<Submission> = xfers.iter_mut().map(|mut xfer| {
+        return submit(&mut xfer, &mut samp_idx)
+    }).collect();
 
-    while let Ok(res) = result_head.recv() {
-        let xfer = &mut xfers[res.idx];
-        submit(xfer, &result_tail, &mut samp_idx)?.await;
+    loop {
+        let (res, _idx, mut compliment) = select_all(submissions.into_iter()).await;
+        let res = res.context("Error in select_all")?;
+        let submission = submit(&mut xfers[res.idx], &mut samp_idx);
+        compliment.push(submission);
+        submissions = compliment;
     }
 
     Ok(())
 }
 
-unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<Submission, Error> {
+unsafe fn submit(xfer: &mut Transfer, mut samp_idx: &mut usize) -> Submission {
     fill_buff(&mut xfer.buff, &mut samp_idx);
     let (result_tail, result_head): (oneshot::Sender<TransferResult>, oneshot::Receiver<TransferResult>) = oneshot::channel();
-    Ok(Submission { idx: xfer.idx, xfer: xfer.xfer, result_head, result_tail: Some(result_tail) })
+    Submission { idx: xfer.idx, xfer: xfer.xfer, result_head, result_tail: Some(result_tail) }
 }
 
 unsafe fn rusb_event_loop() {
