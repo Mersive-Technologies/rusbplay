@@ -113,12 +113,12 @@ async unsafe fn run() -> Result<(), Error> {
 
     let mut samp_idx = 0;
     for mut xfer in xfers.iter_mut() {
-        submit(&mut xfer, &result_tail, &mut samp_idx)?;
+        submit(&mut xfer, &result_tail, &mut samp_idx)?.await;
     }
 
     while let Ok(res) = result_head.recv() {
         let xfer = &mut xfers[res.idx];
-        submit(xfer, &result_tail, &mut samp_idx)?;
+        submit(xfer, &result_tail, &mut samp_idx)?.await;
     }
 
     Ok(())
