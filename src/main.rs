@@ -29,16 +29,17 @@ pub struct TransferContext {
 }
 
 pub struct Transfer {
+    pub idx: usize,
     pub buff: Vec<i16>,
     pub xfer: *mut libusb_transfer,
 }
 
 impl Transfer {
-    fn new(mut handle: &mut DeviceHandle<GlobalContext>) -> Result<Transfer, Error> {
+    fn new(idx: usize, mut handle: &mut DeviceHandle<GlobalContext>) -> Result<Transfer, Error> {
         unsafe {
             let mut buff = vec![0i16; cfg.pkt_cnt * cfg.pkt_sz / 2];
             let xfer = alloc_xfer(&mut handle, &mut buff).context(anyhow!("Error allocating transfer"))?;
-            return Ok(Transfer { buff, xfer });
+            return Ok(Transfer { idx, buff, xfer });
         }
     }
 }
@@ -88,35 +89,35 @@ unsafe fn run() -> Result<(), Error> {
 
     // allocate transfer
     let mut xfers = vec![];
-    for _ in 0..cfg.buff_cnt {
-        xfers.push(Transfer::new(&mut handle).context("Error creating transfer")?);
+    for idx in 0..cfg.buff_cnt {
+        xfers.push(Transfer::new(idx as usize, &mut handle).context("Error creating transfer")?);
     }
 
     let (result_tail, result_head): (Sender<TransferResult>, Receiver<TransferResult>) = channel();
 
     let mut samp_idx = 0;
-    for (idx, mut xfer) in xfers.iter_mut().enumerate() {
-        submit(idx, &mut xfer, &result_tail, &mut samp_idx)?;
+    for mut xfer in xfers.iter_mut() {
+        submit(&mut xfer, &result_tail, &mut samp_idx)?;
     }
 
     while let Ok(res) = result_head.recv() {
         let xfer = &mut xfers[res.idx];
-        submit(res.idx, xfer, &result_tail, &mut samp_idx)?;
+        submit(xfer, &result_tail, &mut samp_idx)?;
     }
 
     Ok(())
 }
 
-unsafe fn submit(idx: usize, xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<(), Error> {
+unsafe fn submit(xfer: &mut Transfer, result_tail: &Sender<TransferResult>, mut samp_idx: &mut usize) -> Result<(), Error> {
     fill_buff(&mut xfer.buff, &mut samp_idx);
     let ctx = Box::new(TransferContext {
-        idx,
+        idx: xfer.idx,
         result_tail: result_tail.clone()
     });
     (*xfer.xfer).user_data = Box::into_raw(ctx) as *mut c_void;
     let res = libusb_submit_transfer(xfer.xfer);
     if res == 0 {
-        info!("Transfer submitted idx={} result={}", idx, res);
+        info!("Transfer submitted idx={} result={}", xfer.idx, res);
         Ok(())
     } else {
         Err(anyhow!("Failed to submit!"))
