@@ -60,7 +60,7 @@ lazy_static! {
     static ref cfg: Config = Config {
         vid: 0x0bda,
         pid: 0x48a8,
-        iface: 2,
+        iface: 1,
         ep: 4,
         set_enabled: 2,
         set_disable: 0,
